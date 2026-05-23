@@ -1,0 +1,71 @@
+"""Shared schema constants for manifests, provenance, and tidy catalogs."""
+
+MANIFEST_VERSION = 1
+CLASSIFIER_VERSION = "2026-05-23.1"
+
+REQUIRED_MANIFEST_FIELDS = (
+    "manifest_version",
+    "created_at_utc",
+    "site_id",
+    "usgs_gage_id",
+    "hydrofabric_feature_id",
+    "vpu_id",
+    "stream",
+    "hydrofabric_version",
+    "run_date",
+    "run_type",
+    "cycle",
+    "object_key",
+    "public_url",
+    "format",
+    "size_bytes",
+    "etag",
+    "last_modified",
+    "classification",
+    "classification_reason",
+    "mapping_evidence_ref",
+    "source_listing_ref",
+    "approved_for_download",
+)
+
+REQUIRED_PROVENANCE_FIELDS = (
+    "event_id",
+    "event_type",
+    "timestamp_utc",
+    "command",
+    "config_files",
+    "manifest_path",
+    "source_bucket",
+    "source_key",
+    "source_etag",
+    "source_last_modified",
+    "source_size_bytes",
+    "local_path",
+    "local_sha256",
+    "classifier_version",
+    "decision",
+    "reason",
+    "software_versions",
+)
+
+REQUIRED_DATA_CATALOG_FIELDS = (
+    "site_id",
+    "usgs_gage_id",
+    "hydrofabric_feature_id",
+    "vpu_id",
+    "stream",
+    "run_date",
+    "run_type",
+    "cycle",
+    "source_format",
+    "tidy_path",
+    "row_count",
+    "start_time_utc",
+    "end_time_utc",
+    "time_step_seconds",
+    "flow_variable",
+    "flow_units",
+    "missing_count",
+    "qc_status",
+    "source_manifest_ref",
+)

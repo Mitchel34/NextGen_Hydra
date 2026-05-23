@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Project data and generated artifacts. These must not be committed.
+data/raw/
+data/tidy/
+data/inventory/
+data/provenance/
+data/cache/
+manifests/*.jsonl
+reports/*.json
+reports/*.jsonl
+reports/*.md
+*.part

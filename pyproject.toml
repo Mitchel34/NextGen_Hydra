@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nextgen-hydra"
+version = "0.1.0"
+description = "Fail-closed NRDS NextGen streamflow acquisition and preparation CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+data = [
+  "pandas>=2.2",
+  "pyarrow>=15.0",
+  "xarray>=2024.1",
+  "netCDF4>=1.6",
+]
+
+[project.scripts]
+nextgen-hydra = "nextgen_hydra.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
