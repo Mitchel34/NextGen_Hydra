@@ -1,0 +1,89 @@
+version: 1
+
+nrds:
+  s3_bucket: ciroh-community-ngen-datastream
+  s3_region: us-east-1
+  public_s3_base_url: https://ciroh-community-ngen-datastream.s3.amazonaws.com
+  datastream_browser_url: https://datastream.ciroh.org/
+  nrds_browser_url: http://nrds.ciroh.org/
+  hydrofabric_version: v2.2_hydrofabric
+  candidate_streams:
+    - cfe_nom
+    - lstm_0
+  approved_output_prefix_template: "outputs/{stream}/{hydrofabric_version}/ngen.{yyyymmdd}/{run_type}/{cycle}/VPU_{vpu_id}/ngen-run/outputs/troute/"
+  approved_output_filename_glob: "troute_output_*"
+  approved_output_extensions:
+    - .parquet
+    - .nc
+
+metadata:
+  approved_directory: datastream-metadata
+  approved_filenames:
+    - conf_datastream.json
+    - conf_fp.json
+    - conf_nwmurl.json
+    - datastream.env
+    - datastream_steps.txt
+    - docker_hashes.txt
+    - execution.json
+    - profile.txt
+    - realization_datastream.json
+    - realization_user.json
+
+classifier:
+  fail_closed: true
+  approved_streams:
+    - cfe_nom
+    - lstm_0
+  ambiguous_streams:
+    - lstm
+  reject_prefixes:
+    - forcings/
+    - outputs/routing_only/
+    - outputs/restarts/
+    - outputs/qkrig/
+    - restarts/
+  reject_filenames:
+    - ngen-run.tar.gz
+    - merkdir.file
+  reject_tokens:
+    - nwm
+    - aorc
+    - ldasin
+    - forcing
+    - forcings
+    - precipitation
+    - temperature
+    - pressure
+    - humidity
+    - wind
+    - meteorological
+  require_s3_size: true
+  require_s3_etag: true
+
+safety:
+  milestone_1_allow_object_body_downloads: false
+  proof_download_max_object_mb: 25
+  proof_download_max_total_mb: 100
+  require_explicit_approval_for_full_historical_download: true
+  require_explicit_approval_for_oversized_objects: true
+
+download:
+  dry_run_first: true
+  require_manifest: true
+  require_validated_manifest: true
+  require_classifier_approval: true
+  allow_rejected: false
+  allow_ambiguous: false
+  resume_existing_files: true
+  verify_size: true
+  record_sha256: true
+
+paths:
+  manifests_dir: manifests
+  reports_dir: reports
+  raw_data_dir: data/raw
+  tidy_data_dir: data/tidy
+  inventory_dir: data/inventory
+  provenance_dir: data/provenance
+  cache_dir: data/cache

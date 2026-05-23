@@ -1,0 +1,37 @@
+version: 1
+sites:
+  - site_id: south_fork_new_river_near_jefferson_nc
+    name: South Fork New River near Jefferson, NC
+    usgs_gage_id: "03161000"
+    hydrofabric_feature_id: 6892192
+    discovered_vpu_id: null
+    mapping_status: unmapped
+    mapping_evidence: null
+    notes: null
+
+  - site_id: new_river_near_galax_va
+    name: New River near Galax, VA
+    usgs_gage_id: "03164000"
+    hydrofabric_feature_id: 6887572
+    discovered_vpu_id: null
+    mapping_status: unmapped
+    mapping_evidence: null
+    notes: null
+
+  - site_id: watauga_river_near_sugar_grove_nc
+    name: Watauga River near Sugar Grove, NC
+    usgs_gage_id: "03479000"
+    hydrofabric_feature_id: 19743430
+    discovered_vpu_id: null
+    mapping_status: unmapped
+    mapping_evidence: null
+    notes: null
+
+  - site_id: watauga_river_at_elizabethton_tn
+    name: Watauga River at Elizabethton, TN
+    usgs_gage_id: "03486000"
+    hydrofabric_feature_id: 19745222
+    discovered_vpu_id: null
+    mapping_status: unmapped
+    mapping_evidence: null
+    notes: null
