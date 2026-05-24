@@ -20,6 +20,9 @@ from .io.s3 import public_url
 from .schemas import MANIFEST_VERSION, REQUIRED_MANIFEST_FIELDS
 
 
+APPROVED_PRODUCT_TYPES = {"troute_streamflow_output", "metadata_provenance"}
+
+
 class ManifestError(ValueError):
     """Raised when a manifest is unsafe or malformed."""
 
@@ -70,6 +73,7 @@ def build_manifest_records(
                 "usgs_gage_id": site.usgs_gage_id,
                 "hydrofabric_feature_id": site.hydrofabric_feature_id,
                 "vpu_id": parsed["vpu_id"],
+                "product_type": parsed["product_type"],
                 "stream": parsed["stream"],
                 "hydrofabric_version": parsed["hydrofabric_version"],
                 "run_date": parsed["run_date"],
@@ -110,6 +114,7 @@ def find_candidate_issues(
             "object_key": discovery.get("key") or discovery.get("object_key"),
             "size_bytes": discovery.get("size_bytes", discovery.get("size")),
             "etag": _clean_etag(discovery.get("etag", discovery.get("ETag"))),
+            "product_type": classification.parsed.get("product_type"),
             "classification": classification.classification,
             "classification_reason": classification.reason,
             "source_listing_ref": discovery.get("source_listing_ref"),
@@ -194,6 +199,9 @@ def build_manifest_summary(
             "vpu_id": site.discovered_vpu_id,
             "record_count": len(site_records),
             "total_size_bytes": sum(int(record["size_bytes"]) for record in site_records),
+            "product_type_counts": dict(
+                Counter(str(record["product_type"]) for record in site_records)
+            ),
             "mapping_evidence_ref": _mapping_evidence_ref(site),
         }
 
@@ -259,9 +267,11 @@ def build_manifest_summary(
             "unique_size_bytes": unique_size,
             "max_object_size_bytes": max_size,
             "classification_counts": dict(Counter(record["classification"] for record in manifest)),
+            "product_type_counts": dict(Counter(record["product_type"] for record in manifest)),
             "approved_for_download_count": sum(
                 1 for record in manifest if record.get("approved_for_download") is True
             ),
+            "product_types": sorted({str(record["product_type"]) for record in manifest}),
             "run_dates": sorted({str(record["run_date"]) for record in manifest}),
             "run_types": sorted({str(record["run_type"]) for record in manifest}),
             "cycles": sorted({str(record["cycle"]) for record in manifest}),
@@ -305,12 +315,14 @@ def validate_manifest_records(
     records: Iterable[dict[str, Any]],
     defaults: dict[str, Any],
     *,
+    sites: list[Site] | None = None,
     require_download_approval: bool = True,
     allow_oversized: bool = False,
 ) -> list[dict[str, Any]]:
     errors: list[str] = []
     validated: list[dict[str, Any]] = []
     max_bytes = proof_download_max_object_bytes(defaults)
+    sites_by_id = None if sites is None else {site.site_id: site for site in sites}
     for index, record in enumerate(records, start=1):
         missing = [
             field
@@ -324,8 +336,14 @@ def validate_manifest_records(
             errors.append(f"row {index}: unsupported manifest_version")
         if record["classification"] != "approved":
             errors.append(f"row {index}: classification is not approved")
+        if record["product_type"] not in APPROVED_PRODUCT_TYPES:
+            errors.append(
+                f"row {index}: product_type is not approved: {record['product_type']!r}"
+            )
         if require_download_approval and record["approved_for_download"] is not True:
             errors.append(f"row {index}: approved_for_download is not true")
+        if sites_by_id is not None:
+            _validate_site_fields(record, index, sites_by_id, errors)
         size = _coerce_size(record.get("size_bytes"), index, errors)
         if size is not None and size > max_bytes and not allow_oversized:
             errors.append(
@@ -346,7 +364,15 @@ def validate_manifest_records(
                 f"{record['object_key']}: {reclassified.reason}"
             )
         parsed = reclassified.parsed
-        for field in ("stream", "hydrofabric_version", "run_date", "run_type", "cycle", "vpu_id"):
+        for field in (
+            "product_type",
+            "stream",
+            "hydrofabric_version",
+            "run_date",
+            "run_type",
+            "cycle",
+            "vpu_id",
+        ):
             if parsed.get(field) != str(record[field]):
                 errors.append(
                     f"row {index}: parsed {field}={parsed.get(field)!r} "
@@ -379,6 +405,7 @@ def render_manifest_summary_markdown(summary: dict[str, Any]) -> str:
         f"- Unique object bytes: {manifest['unique_size_bytes']}",
         f"- Max object bytes: {manifest['max_object_size_bytes']}",
         f"- Classification counts: `{manifest['classification_counts']}`",
+        f"- Product type counts: `{manifest['product_type_counts']}`",
         f"- Streams: `{manifest['streams']}`",
         f"- VPUs: `{manifest['vpus']}`",
         f"- Run dates: `{manifest['run_dates']}`",
@@ -417,6 +444,7 @@ def render_manifest_summary_markdown(summary: dict[str, Any]) -> str:
             "- "
             + f"`{site_id}` (`{record['usgs_gage_id']}`, VPU_{record['vpu_id']}): "
             + f"records={record['record_count']}, bytes={record['total_size_bytes']}, "
+            + f"product_types=`{record['product_type_counts']}`, "
             + f"evidence=`{record['mapping_evidence_ref']}`"
         )
     if discovery["ambiguous_records"] or discovery["rejected_records"] or discovery["conflicting_records"]:
@@ -479,6 +507,39 @@ def _coerce_size(raw: Any, index: int, errors: list[str]) -> int | None:
         errors.append(f"row {index}: size_bytes is negative")
         return None
     return size
+
+
+def _validate_site_fields(
+    record: dict[str, Any],
+    index: int,
+    sites_by_id: dict[str, Site],
+    errors: list[str],
+) -> None:
+    site_id = str(record["site_id"])
+    site = sites_by_id.get(site_id)
+    if site is None:
+        errors.append(f"row {index}: site_id {site_id!r} is not in configs/sites.yaml")
+        return
+    if str(record["usgs_gage_id"]) != site.usgs_gage_id:
+        errors.append(
+            f"row {index}: usgs_gage_id {record['usgs_gage_id']!r} does not match "
+            f"configs/sites.yaml value {site.usgs_gage_id!r}"
+        )
+    try:
+        feature_id = int(record["hydrofabric_feature_id"])
+    except (TypeError, ValueError):
+        errors.append(f"row {index}: hydrofabric_feature_id is not an integer")
+    else:
+        if feature_id != site.hydrofabric_feature_id:
+            errors.append(
+                f"row {index}: hydrofabric_feature_id {feature_id!r} does not match "
+                f"configs/sites.yaml value {site.hydrofabric_feature_id!r}"
+            )
+    if str(record["vpu_id"]) != str(site.discovered_vpu_id):
+        errors.append(
+            f"row {index}: vpu_id {record['vpu_id']!r} does not match "
+            f"configs/sites.yaml value {site.discovered_vpu_id!r}"
+        )
 
 
 def _format_issue(issue: dict[str, Any]) -> str:

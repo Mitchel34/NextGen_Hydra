@@ -7,6 +7,7 @@ import csv
 from pathlib import Path
 from typing import Any, Iterable
 
+from .config import Site
 from .download import safe_local_path
 from .manifest import validate_manifest_records
 
@@ -70,13 +71,15 @@ def tidy_manifest_records(
     flow_column: str,
     flow_units: str,
     output_format: str = "parquet",
+    sites: list[Site] | None = None,
 ) -> list[dict[str, Any]]:
     """Transform validated approved raw records using explicit schema arguments."""
 
-    validated = validate_manifest_records(manifest_records, defaults)
+    validated = validate_manifest_records(manifest_records, defaults, sites=sites)
+    data_records = _tidy_data_records(validated)
     output_dir.mkdir(parents=True, exist_ok=True)
     catalog: list[dict[str, Any]] = []
-    for record in validated:
+    for record in data_records:
         local_path = safe_local_path(raw_dir, record["object_key"])
         if not local_path.exists():
             raise TidyError(f"raw file is missing for manifest row: {local_path}")
@@ -110,6 +113,7 @@ def tidy_manifest_records(
                 flow_units=flow_units,
             )
         )
+    _require_per_site_coverage(catalog, data_records)
     return catalog
 
 
@@ -130,6 +134,7 @@ def build_catalog_record(
         "usgs_gage_id": record["usgs_gage_id"],
         "hydrofabric_feature_id": record["hydrofabric_feature_id"],
         "vpu_id": record["vpu_id"],
+        "product_type": record["product_type"],
         "stream": record["stream"],
         "run_date": record["run_date"],
         "run_type": record["run_type"],
@@ -143,9 +148,56 @@ def build_catalog_record(
         "flow_variable": flow_variable,
         "flow_units": flow_units,
         "missing_count": missing_count,
+        "duplicate_timestamp_count": _duplicate_timestamp_count(tidy_rows),
+        "target_feature_present": bool(tidy_rows),
+        "coverage_status": "pass" if tidy_rows else "fail",
         "qc_status": "pass" if tidy_rows and missing_count == 0 else "review",
         "source_manifest_ref": record["object_key"],
     }
+
+
+def _tidy_data_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    data_records: list[dict[str, Any]] = []
+    for record in records:
+        product_type = record.get("product_type")
+        if product_type == "metadata_provenance":
+            continue
+        if product_type != "troute_streamflow_output":
+            raise TidyError(
+                "tidy requires product_type == troute_streamflow_output; "
+                f"found {product_type!r} for {record.get('object_key')}"
+            )
+        data_records.append(record)
+    if not data_records:
+        raise TidyError("manifest contains no troute_streamflow_output rows to tidy")
+    return data_records
+
+
+def _require_per_site_coverage(
+    catalog: list[dict[str, Any]],
+    data_records: list[dict[str, Any]],
+) -> None:
+    expected_sites = sorted({str(record["site_id"]) for record in data_records})
+    row_counts = {site_id: 0 for site_id in expected_sites}
+    for record in catalog:
+        row_counts[str(record["site_id"])] += int(record.get("row_count") or 0)
+    missing = [site_id for site_id, row_count in row_counts.items() if row_count <= 0]
+    if missing:
+        raise TidyError(
+            "tidy coverage failed; no target feature rows for site(s): "
+            + ", ".join(missing)
+        )
+
+
+def _duplicate_timestamp_count(tidy_rows: list[dict[str, Any]]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for row in tidy_rows:
+        timestamp = str(row.get("time_utc"))
+        if timestamp in seen:
+            duplicates += 1
+        seen.add(timestamp)
+    return duplicates
 
 
 def _read_source_rows(local_path: Path, source_format: str) -> list[dict[str, Any]]:

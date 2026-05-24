@@ -35,3 +35,18 @@ def approved_object(approved_object_key: str):
         "last_modified": "2026-05-22T01:00:00.000Z",
         "source_listing_ref": "fixture",
     }
+
+
+@pytest.fixture
+def approved_metadata_object():
+    return {
+        "record_type": "object",
+        "key": (
+            "outputs/cfe_nom/v2.2_hydrofabric/ngen.20260522/short_range/00/"
+            "VPU_05/datastream-metadata/execution.json"
+        ),
+        "size_bytes": 100,
+        "etag": "metadata123",
+        "last_modified": "2026-05-22T01:00:00.000Z",
+        "source_listing_ref": "fixture",
+    }

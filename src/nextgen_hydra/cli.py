@@ -12,6 +12,7 @@ from .config import (
     ConfigError,
     load_project,
     mapped_site_count,
+    proof_download_max_object_bytes,
     proof_download_max_total_bytes,
     require_all_sites_mapped,
 )
@@ -20,7 +21,13 @@ from .discovery import (
     run_mapped_site_manifest_discovery,
     run_proof_of_access,
 )
-from .download import DownloadSafetyError, download_manifest_file
+from .download import (
+    DownloadSafetyError,
+    download_plan_metadata,
+    download_manifest_file,
+    manifest_file_metadata,
+    normalize_approval_id,
+)
 from .future import write_future_scaffold
 from .inventory import inventory_raw_files
 from .manifest import (
@@ -35,6 +42,12 @@ from .manifest import (
     write_jsonl,
 )
 from .qc import build_qc_report, write_qc_report
+from .schema_inspection import (
+    SchemaInspectionError,
+    assert_schema_inspection_passed,
+    build_schema_inspection_report,
+    write_schema_inspection_report,
+)
 from .tidy import TidyError, tidy_manifest_records
 
 
@@ -43,7 +56,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, DiscoveryError, ManifestError, DownloadSafetyError, TidyError) as exc:
+    except (
+        ConfigError,
+        DiscoveryError,
+        ManifestError,
+        DownloadSafetyError,
+        SchemaInspectionError,
+        TidyError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -140,10 +160,25 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--raw-dir", type=Path, default=None)
     download.add_argument("--plan-output", type=Path, default=Path("reports/download_plan.jsonl"))
     download.add_argument("--provenance", type=Path, default=None)
-    download.add_argument("--execute", action="store_true")
+    download.add_argument(
+        "--execute",
+        action="store_true",
+        help="execute the approved plan; also implied by --approval-id",
+    )
     download.add_argument("--approval-id", default=None)
     download.add_argument("--milestone", type=int, default=None)
     download.add_argument("--allow-oversized", action="store_true")
+    download.add_argument("--inventory-output", type=Path, default=None)
+    download.add_argument(
+        "--summary-output",
+        type=Path,
+        default=Path("reports/milestone4_download_summary.json"),
+    )
+    download.add_argument(
+        "--summary-markdown",
+        type=Path,
+        default=Path("reports/milestone4_download_summary.md"),
+    )
     download.set_defaults(func=cmd_download)
 
     inventory = subcommands.add_parser("inventory")
@@ -151,6 +186,21 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--raw-dir", type=Path, default=None)
     inventory.add_argument("--output", type=Path, default=Path("data/inventory/inventory.jsonl"))
     inventory.set_defaults(func=cmd_inventory)
+
+    inspect_schema = subcommands.add_parser("inspect-schema")
+    inspect_schema.add_argument("--manifest", type=Path, required=True)
+    inspect_schema.add_argument("--raw-dir", type=Path, default=None)
+    inspect_schema.add_argument(
+        "--output",
+        type=Path,
+        default=Path("reports/schema_inspection.json"),
+    )
+    inspect_schema.add_argument(
+        "--markdown",
+        type=Path,
+        default=Path("reports/schema_inspection.md"),
+    )
+    inspect_schema.set_defaults(func=cmd_inspect_schema)
 
     tidy = subcommands.add_parser("tidy")
     tidy.add_argument("--manifest", type=Path, required=True)
@@ -168,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
     qc.add_argument("--manifest", type=Path, required=False)
     qc.add_argument("--inventory", type=Path, required=False)
     qc.add_argument("--catalog", type=Path, required=False)
+    qc.add_argument("--schema-inspection", type=Path, required=False)
+    qc.add_argument("--download-summary", type=Path, required=False)
     qc.add_argument("--output", type=Path, default=Path("reports/qc_report.md"))
     qc.add_argument("--json-output", type=Path, default=Path("reports/qc_report.json"))
     qc.set_defaults(func=cmd_qc)
@@ -277,7 +329,7 @@ def cmd_build_manifest(args: argparse.Namespace) -> int:
         defaults,
         approved_for_download=not args.not_approved_for_download,
     )
-    validate_manifest_records(manifest, defaults)
+    validate_manifest_records(manifest, defaults, sites=sites)
     summary = build_manifest_summary(
         manifest_records=manifest,
         discovery_records=rows,
@@ -326,6 +378,7 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
     validated = validate_manifest_records(
         rows,
         defaults,
+        sites=sites,
         allow_oversized=args.allow_oversized,
     )
     print(json.dumps({"status": "ok", "records": len(validated)}, indent=2, sort_keys=True))
@@ -336,25 +389,57 @@ def cmd_download(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
+    approval_id = normalize_approval_id(args.approval_id)
+    execute = args.execute or approval_id is not None
     provenance = args.provenance
-    if provenance is None and args.execute:
-        provenance = Path(defaults["paths"]["provenance_dir"]) / "download_events.jsonl"
+    if provenance is None and execute:
+        provenance = Path(defaults["paths"]["reports_dir"]) / "download_provenance.jsonl"
+    started_at = _utc_now()
     plan = download_manifest_file(
         manifest_path=args.manifest,
         raw_dir=raw_dir,
         defaults=defaults,
-        execute=args.execute,
-        approval_id=args.approval_id,
+        execute=execute,
+        approval_id=approval_id,
         milestone=args.milestone,
         allow_oversized=args.allow_oversized,
+        sites=sites,
         plan_output=args.plan_output,
         provenance_path=provenance,
+    )
+    finished_at = _utc_now()
+    inventory_output = None
+    inventory_records = None
+    if execute:
+        inventory_output = args.inventory_output or (
+            Path(defaults["paths"]["inventory_dir"]) / "inventory.jsonl"
+        )
+        inventory_records = inventory_raw_files(raw_dir, read_jsonl(args.manifest))
+        write_jsonl(inventory_output, inventory_records)
+    _write_download_summary(
+        path=args.summary_output,
+        markdown_path=args.summary_markdown,
+        mode="execute" if execute else "dry-run",
+        approval_id=approval_id if execute else None,
+        manifest_path=args.manifest,
+        plan_output=args.plan_output,
+        provenance_path=provenance,
+        inventory_output=inventory_output,
+        inventory_records=inventory_records,
+        plan=plan,
+        defaults=defaults,
+        started_at=started_at,
+        finished_at=finished_at,
     )
     print(
         json.dumps(
             {
-                "mode": "execute" if args.execute else "dry-run",
+                "mode": "execute" if execute else "dry-run",
                 "plan_output": str(args.plan_output) if args.plan_output else None,
+                "summary_output": str(args.summary_output) if args.summary_output else None,
+                "summary_markdown": str(args.summary_markdown) if args.summary_markdown else None,
+                "provenance": str(provenance) if provenance else None,
+                "inventory_output": str(inventory_output) if inventory_output else None,
                 "actions": _count_actions(plan),
             },
             indent=2,
@@ -375,6 +460,37 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inspect_schema(args: argparse.Namespace) -> int:
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
+    raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
+    report = build_schema_inspection_report(
+        manifest_records=read_jsonl(args.manifest),
+        defaults=defaults,
+        sites=sites,
+        raw_dir=raw_dir,
+    )
+    write_schema_inspection_report(
+        report=report,
+        json_path=args.output,
+        markdown_path=args.markdown,
+    )
+    assert_schema_inspection_passed(report)
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "output": str(args.output),
+                "markdown": str(args.markdown),
+                "objects": report["object_count"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_tidy(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
@@ -391,6 +507,7 @@ def cmd_tidy(args: argparse.Namespace) -> int:
         flow_column=args.flow_column,
         flow_units=args.flow_units,
         output_format=args.output_format,
+        sites=sites,
     )
     write_jsonl(args.catalog_output, catalog)
     print(
@@ -409,10 +526,14 @@ def cmd_qc(args: argparse.Namespace) -> int:
     manifest = read_jsonl(args.manifest) if args.manifest else []
     inventory = read_jsonl(args.inventory) if args.inventory else []
     catalog = read_jsonl(args.catalog) if args.catalog else []
+    schema_inspection = _read_json(args.schema_inspection) if args.schema_inspection else None
+    download_summary = _read_json(args.download_summary) if args.download_summary else None
     report = build_qc_report(
         manifest_records=manifest,
         inventory_records=inventory,
         catalog_records=catalog,
+        schema_inspection=schema_inspection,
+        download_summary=download_summary,
     )
     write_qc_report(report=report, markdown_path=args.output, json_path=args.json_output)
     print(json.dumps({"output": str(args.output), "json_output": str(args.json_output)}, indent=2, sort_keys=True))
@@ -430,12 +551,106 @@ def _load(args: argparse.Namespace):
     return load_project(args.root, args.defaults, args.sites)
 
 
+def _read_json(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _count_actions(plan: list[dict[str, object]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in plan:
         action = str(row["action"])
         counts[action] = counts.get(action, 0) + 1
     return counts
+
+
+def _write_download_summary(
+    *,
+    path: Path | None,
+    markdown_path: Path | None,
+    mode: str,
+    approval_id: str | None,
+    manifest_path: Path,
+    plan_output: Path | None,
+    provenance_path: Path | None,
+    inventory_output: Path | None,
+    inventory_records: list[dict[str, object]] | None,
+    plan: list[dict[str, object]],
+    defaults: dict[str, object],
+    started_at: str,
+    finished_at: str,
+) -> None:
+    if path is None and markdown_path is None:
+        return
+    metadata = manifest_file_metadata(manifest_path)
+    plan_metadata = download_plan_metadata(plan, plan_output)
+    pending_actions = {"download", "replace"}
+    summary = {
+        "summary_version": 1,
+        "mode": mode,
+        "approval_id": approval_id,
+        "download_started_at_utc": started_at,
+        "download_finished_at_utc": finished_at,
+        "manifest_path": str(manifest_path),
+        **metadata,
+        **plan_metadata,
+        "plan_output": str(plan_output) if plan_output else None,
+        "provenance": str(provenance_path) if provenance_path else None,
+        "inventory_output": str(inventory_output) if inventory_output else None,
+        "actions": _count_actions(plan),
+        "executed_bytes": sum(int(row.get("executed_size_bytes") or 0) for row in plan),
+        "projected_download_bytes": sum(
+            int(row["size_bytes"])
+            for row in plan
+            if row["action"] in pending_actions
+        ),
+        "max_planned_object_bytes": max(
+            (int(row["size_bytes"]) for row in plan if row["action"] in pending_actions),
+            default=0,
+        ),
+        "inventory_record_count": 0 if inventory_records is None else len(inventory_records),
+        "safety_thresholds": {
+            "max_object_bytes": proof_download_max_object_bytes(defaults),
+            "max_total_bytes": proof_download_max_total_bytes(defaults),
+        },
+    }
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    if markdown_path is not None:
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        markdown_path.write_text(_render_download_summary(summary), encoding="utf-8")
+
+
+def _render_download_summary(summary: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            "# NextGen Hydra Milestone 4 Download Summary",
+            "",
+            f"Mode: `{summary['mode']}`",
+            f"Approval ID: `{summary.get('approval_id')}`",
+            f"Started UTC: `{summary['download_started_at_utc']}`",
+            f"Finished UTC: `{summary['download_finished_at_utc']}`",
+            "",
+            "## Manifest and Plan",
+            "",
+            f"- Manifest: `{summary['manifest_path']}`",
+            f"- Manifest SHA256: `{summary['manifest_sha256']}`",
+            f"- Plan: `{summary.get('plan_output')}`",
+            f"- Plan SHA256: `{summary['download_plan_sha256']}`",
+            f"- Unique objects: {summary['planned_unique_object_count']}",
+            f"- Planned unique bytes: {summary['planned_unique_bytes']}",
+            f"- Projected download bytes: {summary['projected_download_bytes']}",
+            f"- Executed bytes: {summary['executed_bytes']}",
+            f"- Actions: `{summary['actions']}`",
+            "",
+        ]
+    )
+
+
+def _utc_now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 if __name__ == "__main__":  # pragma: no cover

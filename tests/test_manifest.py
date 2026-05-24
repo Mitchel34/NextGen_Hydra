@@ -38,8 +38,25 @@ def test_build_and_validate_manifest(defaults, approved_object):
     assert len(records) == 1
     assert records[0]["classification"] == "approved"
     assert records[0]["approved_for_download"] is True
+    assert records[0]["product_type"] == "troute_streamflow_output"
     assert records[0]["vpu_id"] == "05"
-    assert validate_manifest_records(records, defaults) == records
+    assert validate_manifest_records(records, defaults, sites=[mapped_site()]) == records
+
+
+def test_manifest_records_include_metadata_product_type(
+    defaults, approved_object, approved_metadata_object
+):
+    records = build_manifest_records(
+        [approved_object, approved_metadata_object],
+        [mapped_site()],
+        defaults,
+    )
+
+    assert {record["product_type"] for record in records} == {
+        "troute_streamflow_output",
+        "metadata_provenance",
+    }
+    assert validate_manifest_records(records, defaults, sites=[mapped_site()]) == records
 
 
 def test_manifest_allows_multiple_sites_in_same_vpu(defaults, approved_object):
@@ -102,6 +119,26 @@ def test_manifest_validation_rejects_unsafe_rows(defaults, approved_object):
     missing.pop("etag")
     with pytest.raises(ManifestError, match="missing required fields"):
         validate_manifest_records([missing], defaults)
+
+    missing_product_type = dict(records[0])
+    missing_product_type.pop("product_type")
+    with pytest.raises(ManifestError, match="missing required fields"):
+        validate_manifest_records([missing_product_type], defaults)
+
+
+def test_manifest_validation_rejects_stale_site_fields(defaults, approved_object):
+    site = mapped_site()
+    records = build_manifest_records([approved_object], [site], defaults)
+    examples = [
+        dict(records[0], site_id="unknown_site"),
+        dict(records[0], usgs_gage_id="99999999"),
+        dict(records[0], hydrofabric_feature_id=123),
+        dict(records[0], vpu_id="06"),
+    ]
+
+    for edited in examples:
+        with pytest.raises(ManifestError, match="configs/sites.yaml"):
+            validate_manifest_records([edited], defaults, sites=[site])
 
 
 def test_candidate_assessment_stops_on_conflicting_streamflow_outputs(defaults):

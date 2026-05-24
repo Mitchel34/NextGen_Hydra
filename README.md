@@ -18,7 +18,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install '.[dev]'
 ```
 
-Optional tidy transforms for real Parquet/NetCDF files require:
+Optional schema inspection and tidy transforms for real Parquet/NetCDF files require:
 
 ```bash
 .venv/bin/python -m pip install '.[data]'
@@ -83,43 +83,86 @@ approved troute/metadata prefixes; no object bodies are downloaded:
   --manifest manifests/manifest.jsonl
 ```
 
-Dry-run downloader plan:
+Milestone 4 pre-download workflow:
+
+1. Validate config.
+2. Validate the manifest against `configs/sites.yaml`.
+3. Run a dry-run download plan.
+4. Execute only after a concrete `--approval-id` is available.
+5. Inventory downloaded raw files.
+6. Inspect the raw troute schema.
+7. Run tidy only after schema inspection is approved.
+
+Validate and dry-run:
 
 ```bash
+.venv/bin/nextgen-hydra validate-config
+
+.venv/bin/nextgen-hydra validate-manifest \
+  --manifest manifests/manifest.jsonl
+
 .venv/bin/nextgen-hydra download \
   --manifest manifests/manifest.jsonl \
   --plan-output reports/download_plan.jsonl
 ```
 
-Real downloads require `--execute` and an explicit `--approval-id`. Milestone 1
-execution is always refused.
+Real downloads require an explicit concrete `--approval-id`; without it, the
+command remains dry-run-only. `--execute` is still accepted for compatibility
+but is implied by `--approval-id`. Milestone 1 execution is always refused.
 
 ```bash
 .venv/bin/nextgen-hydra download \
   --manifest manifests/manifest.jsonl \
-  --execute \
-  --approval-id APPROVED_SMALL_SLICE_YYYYMMDD
+  --approval-id APPROVED_SMALL_SLICE_YYYYMMDD \
+  --plan-output reports/download_plan.jsonl \
+  --summary-output reports/milestone4_download_summary.json \
+  --summary-markdown reports/milestone4_download_summary.md
 ```
 
-Inventory, tidy, and QC commands consume validated manifests and local raw
-files:
+Execution writes the plan to `reports/download_plan.jsonl`, provenance to
+`reports/download_provenance.jsonl`, summaries to
+`reports/milestone4_download_summary.json` and
+`reports/milestone4_download_summary.md`, and an inventory to the configured
+inventory directory. Do not commit downloaded files from `data/raw/`.
+
+Inventory and schema inspection:
 
 ```bash
 .venv/bin/nextgen-hydra inventory \
   --manifest manifests/manifest.jsonl \
   --output data/inventory/inventory.jsonl
 
+.venv/bin/nextgen-hydra inspect-schema \
+  --manifest manifests/manifest.jsonl \
+  --raw-dir data/raw \
+  --output reports/schema_inspection.json \
+  --markdown reports/schema_inspection.md
+```
+
+Run tidy only after `reports/schema_inspection.json` has status `pass` and the
+feature/time/streamflow column choices are approved:
+
+```bash
 .venv/bin/nextgen-hydra tidy \
   --manifest manifests/manifest.jsonl \
+  --raw-dir data/raw \
+  --catalog-output data/tidy/catalog.jsonl \
   --feature-id-column feature_id \
   --time-column time \
   --flow-column streamflow \
   --flow-units "m3 s-1"
+```
 
+QC consumes the manifest, inventory, tidy catalog, schema inspection, and
+download summary:
+
+```bash
 .venv/bin/nextgen-hydra qc-report \
   --manifest manifests/manifest.jsonl \
   --inventory data/inventory/inventory.jsonl \
-  --catalog data/tidy/catalog.jsonl
+  --catalog data/tidy/catalog.jsonl \
+  --schema-inspection reports/schema_inspection.json \
+  --download-summary reports/milestone4_download_summary.json
 ```
 
 ## Tests
