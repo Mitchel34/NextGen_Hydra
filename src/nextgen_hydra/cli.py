@@ -8,7 +8,12 @@ from pathlib import Path
 import sys
 
 from .classifier import classify_records
-from .config import ConfigError, load_project
+from .config import (
+    ConfigError,
+    load_project,
+    mapped_site_count,
+    require_all_sites_mapped,
+)
 from .discovery import DiscoveryError, run_proof_of_access
 from .download import DownloadSafetyError, download_manifest_file
 from .future import write_future_scaffold
@@ -145,10 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_validate_config(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     summary = {
         "status": "ok",
         "site_count": len(sites),
-        "mapped_site_count": sum(1 for site in sites if site.is_mapped),
+        "mapped_site_count": mapped_site_count(sites),
         "bucket": defaults["nrds"]["s3_bucket"],
         "candidate_streams": defaults["nrds"]["candidate_streams"],
         "hydrofabric_version": defaults["nrds"]["hydrofabric_version"],
@@ -201,6 +207,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
 def cmd_build_manifest(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     rows = read_jsonl(args.discovery)
     manifest = build_manifest_records(
         rows,
@@ -215,7 +222,8 @@ def cmd_build_manifest(args: argparse.Namespace) -> int:
 
 
 def cmd_validate_manifest(args: argparse.Namespace) -> int:
-    defaults, _sites = _load(args)
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     rows = read_jsonl(args.manifest)
     validated = validate_manifest_records(
         rows,
@@ -227,7 +235,8 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
 
 
 def cmd_download(args: argparse.Namespace) -> int:
-    defaults, _sites = _load(args)
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
     provenance = args.provenance
     if provenance is None and args.execute:
@@ -258,7 +267,8 @@ def cmd_download(args: argparse.Namespace) -> int:
 
 
 def cmd_inventory(args: argparse.Namespace) -> int:
-    defaults, _sites = _load(args)
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
     manifest = read_jsonl(args.manifest) if args.manifest else None
     rows = inventory_raw_files(raw_dir, manifest)
@@ -268,7 +278,8 @@ def cmd_inventory(args: argparse.Namespace) -> int:
 
 
 def cmd_tidy(args: argparse.Namespace) -> int:
-    defaults, _sites = _load(args)
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
     output_dir = args.output_dir or Path(defaults["paths"]["tidy_data_dir"])
     manifest = read_jsonl(args.manifest)
@@ -295,7 +306,8 @@ def cmd_tidy(args: argparse.Namespace) -> int:
 
 
 def cmd_qc(args: argparse.Namespace) -> int:
-    _defaults, _sites = _load(args)
+    _defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
     manifest = read_jsonl(args.manifest) if args.manifest else []
     inventory = read_jsonl(args.inventory) if args.inventory else []
     catalog = read_jsonl(args.catalog) if args.catalog else []

@@ -26,7 +26,8 @@ Assumptions:
 
 Unknowns that must be resolved during implementation:
 
-- Exact VPU IDs for the four hydrofabric feature IDs.
+- Exact VPU IDs for the four hydrofabric feature IDs. Resolved on 2026-05-23
+  and recorded in `configs/sites.yaml` and `docs/vpu_mapping_evidence.md`.
 - Whether all four feature IDs are present in the approved `cfe_nom` and `lstm_0` outputs.
 - Exact current historical date ranges per approved stream, VPU, run type, cycle, and format.
 - Whether historical NetCDF output files can be inspected safely with header-only or small-range reads before any larger download.
@@ -111,6 +112,16 @@ Mapping steps:
 5. Verify that each target hydrofabric feature ID is present in the approved output file schema or index before marking the site downloadable.
 6. Keep `discovered_vpu_id` null and `mapping_status` non-final until evidence is recorded.
 
+Milestone 2 update, 2026-05-23:
+
+- `6892192` maps to `VPU_05`.
+- `6887572` maps to `VPU_05`.
+- `19743430` maps to `VPU_06`.
+- `19745222` maps to `VPU_06`.
+- Evidence is recorded in `docs/vpu_mapping_evidence.md`.
+- Target feature presence inside approved troute output files still requires an
+  explicitly approved later schema/data inspection step.
+
 Do not infer VPU IDs from the site state, gage ID, river name, or approximate geography. Stop if any feature ID does not map cleanly.
 
 ## 6. Recommended Repo Tree
@@ -174,7 +185,9 @@ Required fields:
 - `mapping_evidence`
 - `notes`
 
-Initial `discovered_vpu_id` values remain null. Initial `mapping_status` is `unmapped`.
+After Milestone 2, the four canonical `discovered_vpu_id` values are verified
+and `mapping_status` is `verified`. New or replacement sites must remain null
+and non-final until authoritative evidence is recorded.
 
 ### `configs/defaults.yaml`
 

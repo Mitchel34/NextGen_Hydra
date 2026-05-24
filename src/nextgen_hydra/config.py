@@ -24,6 +24,7 @@ CANONICAL_FEATURE_IDS = {
     "watauga_river_near_sugar_grove_nc": ("03479000", 19743430),
     "watauga_river_at_elizabethton_tn": ("03486000", 19745222),
 }
+FINAL_MAPPING_STATUSES = {"verified", "downloadable"}
 
 
 class ConfigError(ValueError):
@@ -75,7 +76,7 @@ class Site:
     def is_mapped(self) -> bool:
         return (
             self.discovered_vpu_id is not None
-            and self.mapping_status in {"mapped", "verified", "downloadable"}
+            and self.mapping_status in FINAL_MAPPING_STATUSES
             and self.mapping_evidence not in (None, "")
         )
 
@@ -146,6 +147,79 @@ def validate_canonical_sites(sites: list[Site]) -> None:
                 f"{site.site_id} has feature ID {site.hydrofabric_feature_id}, "
                 f"expected {expected_feature_id}"
             )
+
+
+def mapped_site_count(sites: list[Site]) -> int:
+    return sum(1 for site in sites if site.is_mapped)
+
+
+def mapping_validation_errors(sites: list[Site]) -> list[str]:
+    errors: list[str] = []
+    for site in sites:
+        if site.mapping_status not in FINAL_MAPPING_STATUSES:
+            errors.append(
+                f"{site.site_id}: mapping_status must be one of "
+                f"{sorted(FINAL_MAPPING_STATUSES)}, found {site.mapping_status!r}"
+            )
+        if not site.discovered_vpu_id:
+            errors.append(f"{site.site_id}: discovered_vpu_id is required")
+        evidence = site.mapping_evidence
+        if not isinstance(evidence, dict):
+            errors.append(f"{site.site_id}: mapping_evidence must be a mapping")
+            continue
+        required = {
+            "ref",
+            "feature_id_field",
+            "vpu_field",
+            "returned_feature_id",
+            "returned_vpu_id",
+            "sources",
+        }
+        missing = sorted(field for field in required if not evidence.get(field))
+        if missing:
+            errors.append(f"{site.site_id}: mapping_evidence missing {missing}")
+        returned_feature_id = _coerce_int(evidence.get("returned_feature_id"))
+        if returned_feature_id != site.hydrofabric_feature_id:
+            errors.append(
+                f"{site.site_id}: evidence returned_feature_id does not match "
+                "hydrofabric_feature_id"
+            )
+        if str(evidence.get("returned_vpu_id")) != str(site.discovered_vpu_id):
+            errors.append(
+                f"{site.site_id}: evidence returned_vpu_id does not match "
+                "discovered_vpu_id"
+            )
+        sources = evidence.get("sources")
+        if not isinstance(sources, list) or not sources:
+            errors.append(
+                f"{site.site_id}: mapping_evidence sources must be a non-empty list"
+            )
+        elif any(
+            not isinstance(source, dict) or not source.get("url") for source in sources
+        ):
+            errors.append(f"{site.site_id}: every evidence source must include a url")
+    return errors
+
+
+def require_all_sites_mapped(sites: list[Site]) -> None:
+    errors = mapping_validation_errors(sites)
+    count = mapped_site_count(sites)
+    if count != len(sites):
+        missing = [site.site_id for site in sites if not site.is_mapped]
+        errors.append(
+            "mapped_site_count must equal site_count before continuing; "
+            f"mapped_site_count={count}, site_count={len(sites)}, "
+            f"unmapped={missing}"
+        )
+    if errors:
+        raise ConfigError("site VPU mapping validation failed:\n" + "\n".join(errors))
+
+
+def _coerce_int(raw: Any) -> int | None:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def proof_download_max_object_bytes(defaults: dict[str, Any]) -> int:

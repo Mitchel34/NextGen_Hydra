@@ -4,34 +4,98 @@ sites:
     name: South Fork New River near Jefferson, NC
     usgs_gage_id: "03161000"
     hydrofabric_feature_id: 6892192
-    discovered_vpu_id: null
-    mapping_status: unmapped
-    mapping_evidence: null
-    notes: null
+    discovered_vpu_id: "05"
+    mapping_status: verified
+    mapping_evidence:
+      ref: docs/vpu_mapping_evidence.md#south-fork-new-river-near-jefferson-nc
+      discovered_at_utc: "2026-05-23T23:55:00Z"
+      authority: USGS National Hydrologic Geospatial Fabric and NLDI
+      feature_id_field: comid
+      vpu_field: vpuid
+      returned_feature_id: 6892192
+      returned_vpu_id: "05"
+      reachcode: "05050001000408"
+      rpuid: "05d"
+      sources:
+        - name: USGS NLDI nwissite linked data
+          url: https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-03161000
+        - name: USGS Fabric pygeoapi nhdflowline_network item
+          url: https://api.water.usgs.gov/fabric/pygeoapi/collections/nhdflowline_network/items/6892192?f=json
+        - name: USGS legacy WFS nhdflowline_network query
+          url: https://api.water.usgs.gov/geoserver/wmadata/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=wmadata:nhdflowline_network&outputFormat=application/json&CQL_FILTER=comid%3D6892192
+    notes: VPU mapping verified only; target feature presence inside approved troute output files awaits explicitly approved schema/data inspection.
 
   - site_id: new_river_near_galax_va
     name: New River near Galax, VA
     usgs_gage_id: "03164000"
     hydrofabric_feature_id: 6887572
-    discovered_vpu_id: null
-    mapping_status: unmapped
-    mapping_evidence: null
-    notes: null
+    discovered_vpu_id: "05"
+    mapping_status: verified
+    mapping_evidence:
+      ref: docs/vpu_mapping_evidence.md#new-river-near-galax-va
+      discovered_at_utc: "2026-05-23T23:55:00Z"
+      authority: USGS National Hydrologic Geospatial Fabric and NLDI
+      feature_id_field: comid
+      vpu_field: vpuid
+      returned_feature_id: 6887572
+      returned_vpu_id: "05"
+      reachcode: "05050001002694"
+      rpuid: "05d"
+      sources:
+        - name: USGS NLDI nwissite linked data
+          url: https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-03164000
+        - name: USGS Fabric pygeoapi nhdflowline_network item
+          url: https://api.water.usgs.gov/fabric/pygeoapi/collections/nhdflowline_network/items/6887572?f=json
+        - name: USGS legacy WFS nhdflowline_network query
+          url: https://api.water.usgs.gov/geoserver/wmadata/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=wmadata:nhdflowline_network&outputFormat=application/json&CQL_FILTER=comid%3D6887572
+    notes: VPU mapping verified only; target feature presence inside approved troute output files awaits explicitly approved schema/data inspection.
 
   - site_id: watauga_river_near_sugar_grove_nc
     name: Watauga River near Sugar Grove, NC
     usgs_gage_id: "03479000"
     hydrofabric_feature_id: 19743430
-    discovered_vpu_id: null
-    mapping_status: unmapped
-    mapping_evidence: null
-    notes: null
+    discovered_vpu_id: "06"
+    mapping_status: verified
+    mapping_evidence:
+      ref: docs/vpu_mapping_evidence.md#watauga-river-near-sugar-grove-nc
+      discovered_at_utc: "2026-05-23T23:55:00Z"
+      authority: USGS National Hydrologic Geospatial Fabric and NLDI
+      feature_id_field: comid
+      vpu_field: vpuid
+      returned_feature_id: 19743430
+      returned_vpu_id: "06"
+      reachcode: "06010103000146"
+      rpuid: "06a"
+      sources:
+        - name: USGS NLDI nwissite linked data
+          url: https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-03479000
+        - name: USGS Fabric pygeoapi nhdflowline_network item
+          url: https://api.water.usgs.gov/fabric/pygeoapi/collections/nhdflowline_network/items/19743430?f=json
+        - name: USGS legacy WFS nhdflowline_network query
+          url: https://api.water.usgs.gov/geoserver/wmadata/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=wmadata:nhdflowline_network&outputFormat=application/json&CQL_FILTER=comid%3D19743430
+    notes: VPU mapping verified only; target feature presence inside approved troute output files awaits explicitly approved schema/data inspection.
 
   - site_id: watauga_river_at_elizabethton_tn
     name: Watauga River at Elizabethton, TN
     usgs_gage_id: "03486000"
     hydrofabric_feature_id: 19745222
-    discovered_vpu_id: null
-    mapping_status: unmapped
-    mapping_evidence: null
-    notes: null
+    discovered_vpu_id: "06"
+    mapping_status: verified
+    mapping_evidence:
+      ref: docs/vpu_mapping_evidence.md#watauga-river-at-elizabethton-tn
+      discovered_at_utc: "2026-05-23T23:55:00Z"
+      authority: USGS National Hydrologic Geospatial Fabric and NLDI
+      feature_id_field: comid
+      vpu_field: vpuid
+      returned_feature_id: 19745222
+      returned_vpu_id: "06"
+      reachcode: "06010103000036"
+      rpuid: "06a"
+      sources:
+        - name: USGS NLDI nwissite linked data
+          url: https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-03486000
+        - name: USGS Fabric pygeoapi nhdflowline_network item
+          url: https://api.water.usgs.gov/fabric/pygeoapi/collections/nhdflowline_network/items/19745222?f=json
+        - name: USGS legacy WFS nhdflowline_network query
+          url: https://api.water.usgs.gov/geoserver/wmadata/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=wmadata:nhdflowline_network&outputFormat=application/json&CQL_FILTER=comid%3D19745222
+    notes: VPU mapping verified only; target feature presence inside approved troute output files awaits explicitly approved schema/data inspection.

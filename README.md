@@ -26,9 +26,13 @@ Optional tidy transforms for real Parquet/NetCDF files require:
 
 ## Safety Status
 
-Current `configs/sites.yaml` intentionally has `discovered_vpu_id: null` for
-all four sites. Manifest creation and downloads are blocked until authoritative
-feature-to-VPU mapping evidence is added.
+Current `configs/sites.yaml` has verified VPU mappings for all four sites:
+`03161000` and `03164000` map to `VPU_05`; `03479000` and `03486000` map to
+`VPU_06`. Evidence is recorded in `docs/vpu_mapping_evidence.md`.
+
+Milestone 2 is complete and `validate-config` now requires
+`mapped_site_count == 4`. Manifest creation remains the next approval-gated
+step.
 
 Milestone 1 discovery uses public S3 `ListObjectsV2` metadata only. It does not
 download object bodies.
@@ -62,7 +66,7 @@ Classify a discovery inventory:
 ```
 
 Build and validate a manifest only after the four site VPUs are mapped with
-evidence in `configs/sites.yaml`:
+evidence in `configs/sites.yaml` and explicit approval is given for Milestone 3:
 
 ```bash
 .venv/bin/nextgen-hydra build-manifest \

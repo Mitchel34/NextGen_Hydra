@@ -18,7 +18,14 @@ def mapped_site(vpu_id: str = "05") -> Site:
         hydrofabric_feature_id=6892192,
         discovered_vpu_id=vpu_id,
         mapping_status="verified",
-        mapping_evidence={"source_key": "fixture/hydrofabric.parquet"},
+        mapping_evidence={
+            "ref": "fixture",
+            "feature_id_field": "comid",
+            "vpu_field": "vpuid",
+            "returned_feature_id": 6892192,
+            "returned_vpu_id": vpu_id,
+            "sources": [{"url": "https://example.test/source"}],
+        },
         notes=None,
     )
 
@@ -42,7 +49,14 @@ def test_manifest_allows_multiple_sites_in_same_vpu(defaults, approved_object):
         hydrofabric_feature_id=6887572,
         discovered_vpu_id="05",
         mapping_status="verified",
-        mapping_evidence={"source_key": "fixture/hydrofabric.parquet"},
+        mapping_evidence={
+            "ref": "fixture",
+            "feature_id_field": "comid",
+            "vpu_field": "vpuid",
+            "returned_feature_id": 6887572,
+            "returned_vpu_id": "05",
+            "sources": [{"url": "https://example.test/source"}],
+        },
         notes=None,
     )
 
@@ -67,7 +81,7 @@ def test_manifest_requires_clean_vpu_mapping(defaults, approved_object):
         notes=None,
     )
 
-    with pytest.raises(ManifestError, match="must map cleanly"):
+    with pytest.raises(ManifestError, match="site VPU mapping validation failed"):
         build_manifest_records([approved_object], [unmapped], defaults)
 
 

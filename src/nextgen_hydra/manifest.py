@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .classifier import classify_object
-from .config import Site, proof_download_max_object_bytes
+from .config import (
+    ConfigError,
+    Site,
+    proof_download_max_object_bytes,
+    require_all_sites_mapped,
+)
 from .io.s3 import public_url
 from .schemas import MANIFEST_VERSION, REQUIRED_MANIFEST_FIELDS
 
@@ -24,6 +29,11 @@ def build_manifest_records(
     *,
     approved_for_download: bool = True,
 ) -> list[dict[str, Any]]:
+    try:
+        require_all_sites_mapped(sites)
+    except ConfigError as exc:
+        raise ManifestError(str(exc)) from exc
+
     mapped_sites = [site for site in sites if site.is_mapped]
     if len(mapped_sites) != len(sites):
         unmapped = [site.site_id for site in sites if not site.is_mapped]

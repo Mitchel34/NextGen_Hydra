@@ -9,4 +9,4 @@ def test_validate_config_cli(repo_root, capsys):
     assert code == 0
     output = capsys.readouterr().out
     assert '"status": "ok"' in output
-    assert '"mapped_site_count": 0' in output
+    assert '"mapped_site_count": 4' in output
