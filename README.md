@@ -31,8 +31,8 @@ Current `configs/sites.yaml` has verified VPU mappings for all four sites:
 `VPU_06`. Evidence is recorded in `docs/vpu_mapping_evidence.md`.
 
 Milestone 2 is complete and `validate-config` now requires
-`mapped_site_count == 4`. Manifest creation remains the next approval-gated
-step.
+`mapped_site_count == 4`. Milestone 3 builds the classifier-gated manifest from
+metadata-only listings for the mapped VPUs.
 
 Milestone 1 discovery uses public S3 `ListObjectsV2` metadata only. It does not
 download object bodies.
@@ -66,12 +66,18 @@ Classify a discovery inventory:
 ```
 
 Build and validate a manifest only after the four site VPUs are mapped with
-evidence in `configs/sites.yaml` and explicit approval is given for Milestone 3:
+evidence in `configs/sites.yaml` and explicit approval is given for Milestone 3.
+When `--discovery` is omitted, `build-manifest` lists only the mapped VPUs and
+approved troute/metadata prefixes; no object bodies are downloaded:
 
 ```bash
 .venv/bin/nextgen-hydra build-manifest \
-  --discovery reports/classification.jsonl \
-  --output manifests/manifest.jsonl
+  --run-type short_range \
+  --cycle 00 \
+  --output manifests/manifest.jsonl \
+  --discovery-output reports/manifest_discovery.jsonl \
+  --summary-output reports/manifest_summary.json \
+  --summary-markdown reports/manifest_summary.md
 
 .venv/bin/nextgen-hydra validate-manifest \
   --manifest manifests/manifest.jsonl

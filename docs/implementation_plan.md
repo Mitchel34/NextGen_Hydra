@@ -442,29 +442,40 @@ Safety tests:
 - Perform no object-body downloads.
 - Acceptance: bucket root, approved stream roots, and candidate output metadata can be listed and recorded.
 
-### Milestone 2: Manifest For Four Sites
+### Milestone 2: Verified Site-VPU Mapping
 
 - Resolve feature-to-VPU mapping with evidence.
 - Verify candidate outputs exist for mapped VPUs.
-- Acceptance: manifest rows exist only for approved objects and mapped sites.
+- Acceptance: `configs/sites.yaml` has four verified site mappings and
+  `validate-config` requires `mapped_site_count == 4`.
 
-### Milestone 3: Dry-Run Downloader
+### Milestone 3: Classifier-Gated Manifest For Four Sites
+
+- Use S3 listing/HEAD metadata only; do not download object bodies.
+- Build a manifest for approved streamflow outputs and approved small metadata
+  files under the mapped VPUs.
+- Capture counts and byte totals by site/VPU, plus rejected, ambiguous, and
+  conflicting candidate records, in report outputs.
+- Acceptance: manifest rows exist only for approved objects and mapped sites,
+  and `validate-manifest` passes.
+
+### Milestone 4: Dry-Run Downloader
 
 - Implement idempotent dry-run downloader against a validated manifest.
 - Acceptance: downloader reports exact planned downloads and refuses unsafe rows.
 
-### Milestone 4: Real Download Of A Small Approved Date Slice
+### Milestone 5: Real Download Of A Small Approved Date Slice
 
 - After explicit approval, download only a small approved date slice.
 - Enforce 25 MB/object and 100 MB total cap unless separately approved.
 - Acceptance: local files match manifest size, ETag where applicable, and SHA256 provenance.
 
-### Milestone 5: Full Historical Download After Approval
+### Milestone 6: Full Historical Download After Approval
 
 - Expand manifest by approved date range and stream after approval.
 - Acceptance: resumable downloads, inventory, and provenance cover every approved artifact.
 
-### Milestone 6: Tidy Outputs And QC Report
+### Milestone 7: Tidy Outputs And QC Report
 
 - Transform raw approved outputs into site-level tidy time series.
 - Acceptance: tidy Parquet outputs and QC reports include coverage, missingness, units, and source provenance.

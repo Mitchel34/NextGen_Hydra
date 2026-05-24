@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from .classifier import classify_object
+from .config import Site, require_all_sites_mapped
 from .io.s3 import S3ListResult, list_objects_v2, public_url
 
 
@@ -105,6 +107,91 @@ def run_proof_of_access(
     return records
 
 
+def run_mapped_site_manifest_discovery(
+    defaults: dict[str, Any],
+    sites: list[Site],
+    *,
+    run_type: str,
+    cycle: str,
+    run_date: str | None = None,
+    max_objects_per_prefix: int = 100,
+) -> list[dict[str, Any]]:
+    """List only approved candidate prefixes for the configured mapped site VPUs.
+
+    This is the Milestone 3 metadata-only manifest discovery path. It reads S3
+    listing metadata only; object bodies are not requested.
+    """
+
+    require_all_sites_mapped(sites)
+    if not run_type:
+        raise DiscoveryError("targeted manifest discovery requires an explicit run_type")
+    if not cycle:
+        raise DiscoveryError("targeted manifest discovery requires an explicit cycle")
+    if run_date is not None and re.fullmatch(r"\d{8}", run_date) is None:
+        raise DiscoveryError("run_date must be YYYYMMDD when provided")
+    if max_objects_per_prefix <= 0:
+        raise DiscoveryError("max_objects_per_prefix must be positive")
+
+    nrds = defaults["nrds"]
+    bucket = nrds["s3_bucket"]
+    base_url = nrds["public_s3_base_url"]
+    target_vpus = sorted({str(site.discovered_vpu_id) for site in sites if site.is_mapped})
+    records: list[dict[str, Any]] = []
+
+    for stream in nrds["candidate_streams"]:
+        hydro_prefix = f"outputs/{stream}/{nrds['hydrofabric_version']}/"
+        hydro_listing = _list(bucket=bucket, prefix=hydro_prefix, delimiter="/")
+        records.append(_listing_record(hydro_listing, f"{stream}-manifest-dates"))
+        date_prefix = _select_manifest_date_prefix(
+            hydro_listing=hydro_listing,
+            hydro_prefix=hydro_prefix,
+            run_date=run_date,
+        )
+
+        date_listing = _list(bucket=bucket, prefix=date_prefix, delimiter="/")
+        records.append(_listing_record(date_listing, f"{stream}-manifest-run-types"))
+        run_prefix = f"{date_prefix}{run_type}/"
+        _require_prefix(date_listing, run_prefix)
+
+        run_listing = _list(bucket=bucket, prefix=run_prefix, delimiter="/")
+        records.append(_listing_record(run_listing, f"{stream}-manifest-cycles"))
+        cycle_prefix = f"{run_prefix}{cycle}/"
+        _require_prefix(run_listing, cycle_prefix)
+
+        cycle_listing = _list(bucket=bucket, prefix=cycle_prefix, delimiter="/")
+        records.append(_listing_record(cycle_listing, f"{stream}-manifest-vpus"))
+        for vpu_id in target_vpus:
+            vpu_prefix = f"{cycle_prefix}VPU_{vpu_id}/"
+            _require_prefix(cycle_listing, vpu_prefix)
+            records.extend(
+                _manifest_object_records(
+                    bucket=bucket,
+                    base_url=base_url,
+                    defaults=defaults,
+                    prefix=vpu_prefix + "ngen-run/outputs/troute/",
+                    label=f"{stream}-manifest-troute-vpu-{vpu_id}",
+                    max_objects_per_prefix=max_objects_per_prefix,
+                    expected_filenames=None,
+                )
+            )
+            records.extend(
+                _manifest_object_records(
+                    bucket=bucket,
+                    base_url=base_url,
+                    defaults=defaults,
+                    prefix=vpu_prefix + defaults["metadata"]["approved_directory"] + "/",
+                    label=f"{stream}-manifest-metadata-vpu-{vpu_id}",
+                    max_objects_per_prefix=max_objects_per_prefix,
+                    expected_filenames=set(defaults["metadata"]["approved_filenames"]),
+                )
+            )
+
+    object_count = sum(1 for record in records if record.get("record_type") == "object")
+    if object_count == 0:
+        raise DiscoveryError("targeted manifest discovery found no candidate objects")
+    return records
+
+
 def _list(
     *,
     bucket: str,
@@ -133,6 +220,49 @@ def _listing_record(result: S3ListResult, label: str) -> dict[str, Any]:
         "next_token_present": result.next_token is not None,
         "listed_at_utc": datetime.now(UTC).isoformat(),
     }
+
+
+def _manifest_object_records(
+    *,
+    bucket: str,
+    base_url: str,
+    defaults: dict[str, Any],
+    prefix: str,
+    label: str,
+    max_objects_per_prefix: int,
+    expected_filenames: set[str] | None,
+) -> list[dict[str, Any]]:
+    listing = _list(
+        bucket=bucket,
+        prefix=prefix,
+        delimiter=None,
+        max_keys=max_objects_per_prefix,
+    )
+    listing_record = _listing_record(listing, label)
+    if listing.is_truncated:
+        raise DiscoveryError(
+            f"targeted manifest prefix {prefix!r} was truncated; "
+            "increase max_objects_per_prefix before building a manifest"
+        )
+    if not listing.objects:
+        raise DiscoveryError(f"targeted manifest prefix {prefix!r} contains no objects")
+    if expected_filenames is not None:
+        found = {obj["key"].rsplit("/", 1)[-1] for obj in listing.objects}
+        missing = sorted(expected_filenames - found)
+        if missing:
+            raise DiscoveryError(
+                f"targeted metadata prefix {prefix!r} is missing approved files: "
+                + ", ".join(missing)
+            )
+    return [
+        listing_record,
+        *_object_records(
+            listing,
+            defaults=defaults,
+            base_url=base_url,
+            listing_ref=prefix,
+        ),
+    ]
 
 
 def _object_records(
@@ -172,3 +302,19 @@ def _require_prefix(result: S3ListResult, prefix: str) -> None:
 
 def _latest_prefixes(prefixes: list[str], limit: int) -> list[str]:
     return sorted(prefixes, reverse=True)[:limit]
+
+
+def _select_manifest_date_prefix(
+    *,
+    hydro_listing: S3ListResult,
+    hydro_prefix: str,
+    run_date: str | None,
+) -> str:
+    if run_date is not None:
+        selected = f"{hydro_prefix}ngen.{run_date}/"
+        _require_prefix(hydro_listing, selected)
+        return selected
+    latest = _latest_prefixes(hydro_listing.common_prefixes, 1)
+    if not latest:
+        raise DiscoveryError(f"no date prefixes found under {hydro_prefix}")
+    return latest[0]

@@ -12,17 +12,26 @@ from .config import (
     ConfigError,
     load_project,
     mapped_site_count,
+    proof_download_max_total_bytes,
     require_all_sites_mapped,
 )
-from .discovery import DiscoveryError, run_proof_of_access
+from .discovery import (
+    DiscoveryError,
+    run_mapped_site_manifest_discovery,
+    run_proof_of_access,
+)
 from .download import DownloadSafetyError, download_manifest_file
 from .future import write_future_scaffold
 from .inventory import inventory_raw_files
 from .manifest import (
     ManifestError,
     build_manifest_records,
+    build_manifest_summary,
+    find_candidate_issues,
     read_jsonl,
+    require_no_blocking_candidate_issues,
     validate_manifest_records,
+    write_manifest_summary,
     write_jsonl,
 )
 from .qc import build_qc_report, write_qc_report
@@ -87,8 +96,33 @@ def build_parser() -> argparse.ArgumentParser:
     classify.set_defaults(func=cmd_classify)
 
     manifest = subcommands.add_parser("build-manifest")
-    manifest.add_argument("--discovery", type=Path, required=True)
+    manifest.add_argument(
+        "--discovery",
+        type=Path,
+        required=False,
+        help="existing discovery/classification JSONL; omit to run targeted mapped-VPU metadata discovery",
+    )
     manifest.add_argument("--output", type=Path, default=Path("manifests/manifest.jsonl"))
+    manifest.add_argument("--run-date", default=None, help="YYYYMMDD; defaults to latest listed date per stream")
+    manifest.add_argument("--run-type", default=None, help="required for targeted discovery, for example short_range")
+    manifest.add_argument("--cycle", default=None, help="required for targeted discovery, for example 00")
+    manifest.add_argument("--max-objects-per-prefix", type=int, default=100)
+    manifest.add_argument(
+        "--discovery-output",
+        type=Path,
+        default=Path("reports/manifest_discovery.jsonl"),
+        help="where targeted discovery metadata is written",
+    )
+    manifest.add_argument(
+        "--summary-output",
+        type=Path,
+        default=Path("reports/manifest_summary.json"),
+    )
+    manifest.add_argument(
+        "--summary-markdown",
+        type=Path,
+        default=Path("reports/manifest_summary.md"),
+    )
     manifest.add_argument(
         "--not-approved-for-download",
         action="store_true",
@@ -208,7 +242,35 @@ def cmd_classify(args: argparse.Namespace) -> int:
 def cmd_build_manifest(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
-    rows = read_jsonl(args.discovery)
+    discovery_path = args.discovery
+    target: dict[str, object] = {}
+    if discovery_path is None:
+        if not args.run_type or not args.cycle:
+            raise ManifestError(
+                "targeted build-manifest requires --run-type and --cycle; "
+                "provide --discovery to build from an existing discovery JSONL"
+            )
+        rows = run_mapped_site_manifest_discovery(
+            defaults,
+            sites,
+            run_date=args.run_date,
+            run_type=args.run_type,
+            cycle=args.cycle,
+            max_objects_per_prefix=args.max_objects_per_prefix,
+        )
+        write_jsonl(args.discovery_output, rows)
+        discovery_path = args.discovery_output
+        target = {
+            "mode": "targeted-mapped-site-discovery",
+            "run_date": args.run_date or "latest-listed-per-stream",
+            "run_type": args.run_type,
+            "cycle": args.cycle,
+            "max_objects_per_prefix": args.max_objects_per_prefix,
+        }
+        require_no_blocking_candidate_issues(find_candidate_issues(rows, defaults))
+    else:
+        rows = read_jsonl(discovery_path)
+        target = {"mode": "existing-discovery"}
     manifest = build_manifest_records(
         rows,
         sites,
@@ -216,8 +278,44 @@ def cmd_build_manifest(args: argparse.Namespace) -> int:
         approved_for_download=not args.not_approved_for_download,
     )
     validate_manifest_records(manifest, defaults)
+    summary = build_manifest_summary(
+        manifest_records=manifest,
+        discovery_records=rows,
+        sites=sites,
+        defaults=defaults,
+        manifest_path=args.output,
+        discovery_path=discovery_path,
+        target=target,
+    )
+    max_total = proof_download_max_total_bytes(defaults)
+    if summary["manifest"]["site_scoped_size_bytes"] > max_total:
+        raise ManifestError(
+            "manifest site-scoped byte total "
+            f"{summary['manifest']['site_scoped_size_bytes']} exceeds active "
+            f"download threshold {max_total}; approval is required before continuing"
+        )
     write_jsonl(args.output, manifest)
-    print(json.dumps({"output": str(args.output), "records": len(manifest)}, indent=2, sort_keys=True))
+    write_manifest_summary(
+        summary=summary,
+        json_path=args.summary_output,
+        markdown_path=args.summary_markdown,
+    )
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "records": len(manifest),
+                "unique_objects": summary["manifest"]["unique_object_count"],
+                "site_scoped_size_bytes": summary["manifest"]["site_scoped_size_bytes"],
+                "unique_size_bytes": summary["manifest"]["unique_size_bytes"],
+                "discovery_output": str(discovery_path) if discovery_path else None,
+                "summary_output": str(args.summary_output),
+                "summary_markdown": str(args.summary_markdown),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

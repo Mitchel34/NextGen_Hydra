@@ -31,7 +31,7 @@ def plan_downloads(
         allow_oversized=allow_oversized,
     )
     plan: list[dict[str, Any]] = []
-    for record in validated:
+    for record in _unique_download_records(validated):
         local_path = safe_local_path(raw_dir, record["object_key"])
         if local_path.exists():
             actual_size = local_path.stat().st_size
@@ -53,6 +53,8 @@ def plan_downloads(
                 "local_path": str(local_path),
                 "size_bytes": int(record["size_bytes"]),
                 "etag": record["etag"],
+                "site_ids": record["site_ids"],
+                "manifest_row_count": record["manifest_row_count"],
             }
         )
     return plan
@@ -130,6 +132,29 @@ def safe_local_path(root: Path, object_key: str) -> Path:
     if object_key.startswith("/") or ".." in object_key.split("/"):
         raise DownloadSafetyError(f"unsafe object key: {object_key}")
     return root / object_key
+
+
+def _unique_download_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = str(record["object_key"])
+        existing = unique.get(key)
+        if existing is None:
+            row = dict(record)
+            row["site_ids"] = [record["site_id"]]
+            row["manifest_row_count"] = 1
+            unique[key] = row
+            continue
+        for field in ("size_bytes", "etag", "public_url"):
+            if str(existing[field]) != str(record[field]):
+                raise DownloadSafetyError(
+                    f"manifest contains conflicting metadata for {key}: {field}"
+                )
+        if record["site_id"] not in existing["site_ids"]:
+            existing["site_ids"].append(record["site_id"])
+            existing["site_ids"].sort()
+        existing["manifest_row_count"] += 1
+    return list(unique.values())
 
 
 def _download_one(url: str, local_path: Path) -> None:

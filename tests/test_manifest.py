@@ -4,6 +4,8 @@ from nextgen_hydra.config import Site
 from nextgen_hydra.manifest import (
     ManifestError,
     build_manifest_records,
+    find_candidate_issues,
+    require_no_blocking_candidate_issues,
     validate_manifest_records,
 )
 
@@ -100,3 +102,34 @@ def test_manifest_validation_rejects_unsafe_rows(defaults, approved_object):
     missing.pop("etag")
     with pytest.raises(ManifestError, match="missing required fields"):
         validate_manifest_records([missing], defaults)
+
+
+def test_candidate_assessment_stops_on_conflicting_streamflow_outputs(defaults):
+    base = (
+        "outputs/cfe_nom/v2.2_hydrofabric/ngen.20260523/short_range/00/"
+        "VPU_05/ngen-run/outputs/troute/"
+    )
+    records = [
+        {
+            "record_type": "object",
+            "key": base + "troute_output_202605230100.parquet",
+            "size_bytes": 1024,
+            "etag": "parquet",
+            "last_modified": "2026-05-23T01:00:00.000Z",
+            "source_listing_ref": base,
+        },
+        {
+            "record_type": "object",
+            "key": base + "troute_output_202605230100.nc",
+            "size_bytes": 1024,
+            "etag": "netcdf",
+            "last_modified": "2026-05-23T01:00:00.000Z",
+            "source_listing_ref": base,
+        },
+    ]
+
+    issues = find_candidate_issues(records, defaults)
+
+    assert len(issues["conflicts"]) == 1
+    with pytest.raises(ManifestError, match="conflicting streamflow output"):
+        require_no_blocking_candidate_issues(issues)
