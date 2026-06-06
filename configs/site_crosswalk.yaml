@@ -1,51 +1,72 @@
 version: 1
-status: unresolved
-generated_at_utc: null
+status: resolved
+generated_at_utc: '2026-06-06T23:30:26.721502+00:00'
 sites:
-  - site_id: south_fork_new_river_near_jefferson_nc
-    usgs_gage_id: "03161000"
-    hydrofabric_feature_id: 6892192
-    vpu_id: "05"
-    troute_feature_id: null
-    status: unresolved
-    confidence: none
-    source_resource_key: null
-    source_table: null
-    source_fields: {}
-    evidence: "Pending approved VPU_05 hydrofabric geopackage crosswalk resolution."
-
-  - site_id: new_river_near_galax_va
-    usgs_gage_id: "03164000"
-    hydrofabric_feature_id: 6887572
-    vpu_id: "05"
-    troute_feature_id: null
-    status: unresolved
-    confidence: none
-    source_resource_key: null
-    source_table: null
-    source_fields: {}
-    evidence: "Pending approved VPU_05 hydrofabric geopackage crosswalk resolution."
-
-  - site_id: watauga_river_near_sugar_grove_nc
-    usgs_gage_id: "03479000"
-    hydrofabric_feature_id: 19743430
-    vpu_id: "06"
-    troute_feature_id: null
-    status: unresolved
-    confidence: none
-    source_resource_key: null
-    source_table: null
-    source_fields: {}
-    evidence: "Pending approved VPU_06 hydrofabric geopackage crosswalk resolution."
-
-  - site_id: watauga_river_at_elizabethton_tn
-    usgs_gage_id: "03486000"
-    hydrofabric_feature_id: 19745222
-    vpu_id: "06"
-    troute_feature_id: null
-    status: unresolved
-    confidence: none
-    source_resource_key: null
-    source_table: null
-    source_fields: {}
-    evidence: "Pending approved VPU_06 hydrofabric geopackage crosswalk resolution."
+- site_id: south_fork_new_river_near_jefferson_nc
+  usgs_gage_id: '03161000'
+  hydrofabric_feature_id: 6892192
+  vpu_id: '05'
+  troute_feature_id: 797343
+  status: resolved
+  confidence: gage-row-match
+  source_resource_key: resources/v2.2_hydrofabric/geopackages/VPU_05/nextgen_VPU_05.gpkg
+  source_table: flowpath-attributes
+  source_fields:
+    match_field: gage
+    target_field: id
+  evidence: flowpath-attributes.gage matched USGS gage 03161000; id=wb-797343
+  candidate_count: 7
+  candidate_troute_feature_ids:
+  - 794276
+  - 797340
+  - 797343
+- site_id: new_river_near_galax_va
+  usgs_gage_id: '03164000'
+  hydrofabric_feature_id: 6887572
+  vpu_id: '05'
+  troute_feature_id: 794296
+  status: resolved
+  confidence: gage-row-match
+  source_resource_key: resources/v2.2_hydrofabric/geopackages/VPU_05/nextgen_VPU_05.gpkg
+  source_table: flowpath-attributes
+  source_fields:
+    match_field: gage
+    target_field: id
+  evidence: flowpath-attributes.gage matched USGS gage 03164000; id=wb-794296
+  candidate_count: 6
+  candidate_troute_feature_ids:
+  - 794296
+  - 797592
+- site_id: watauga_river_near_sugar_grove_nc
+  usgs_gage_id: 03479000
+  hydrofabric_feature_id: 19743430
+  vpu_id: '06'
+  troute_feature_id: 1017846
+  status: resolved
+  confidence: gage-row-match
+  source_resource_key: resources/v2.2_hydrofabric/geopackages/VPU_06/nextgen_VPU_06.gpkg
+  source_table: flowpath-attributes
+  source_fields:
+    match_field: gage
+    target_field: id
+  evidence: flowpath-attributes.gage matched USGS gage 03479000; id=wb-1017846
+  candidate_count: 6
+  candidate_troute_feature_ids:
+  - 1017693
+  - 1017846
+- site_id: watauga_river_at_elizabethton_tn
+  usgs_gage_id: 03486000
+  hydrofabric_feature_id: 19745222
+  vpu_id: '06'
+  troute_feature_id: 1017710
+  status: resolved
+  confidence: gage-row-match
+  source_resource_key: resources/v2.2_hydrofabric/geopackages/VPU_06/nextgen_VPU_06.gpkg
+  source_table: flowpath-attributes
+  source_fields:
+    match_field: gage
+    target_field: id
+  evidence: flowpath-attributes.gage matched USGS gage 03486000; id=wb-1017710
+  candidate_count: 5
+  candidate_troute_feature_ids:
+  - 1017710

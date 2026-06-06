@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -19,20 +20,36 @@ class CrosswalkError(RuntimeError):
 
 MATCH_FIELD_HINTS = {
     "comid",
+    "hf_id",
     "nhdplus_comid",
     "hydrofabric_feature_id",
     "feature_id",
     "hl_link",
     "hl_reference",
 }
+GAGE_FIELD_HINTS = {
+    "gage",
+    "gage_id",
+    "gage_nex_id",
+    "usgs_gage_id",
+    "site_no",
+    "station_id",
+    "hl_link",
+    "hl_uri",
+}
+GAGE_TABLE_PRIORITY = {
+    "flowpath_attributes": 0,
+    "hydrolocations": 1,
+    "network": 2,
+}
 TARGET_FIELD_PRIORITY = (
     "id",
     "feature_id",
-    "divide_id",
-    "toid",
     "link",
+    "divide_id",
     "comid",
 )
+TROUTE_ID_PATTERN = re.compile(r"^(?:wb|cat)-(\d+)$", re.IGNORECASE)
 
 
 def load_site_crosswalk(path: Path) -> dict[str, Any]:
@@ -164,19 +181,69 @@ def _resolve_one_site(
             "evidence": f"resource geopackage is missing: {path}",
             "candidate_count": 0,
         }
-    candidates = _find_candidates(path, site.hydrofabric_feature_id)
-    unique_targets = sorted({candidate["troute_feature_id"] for candidate in candidates})
+    gage_candidates = _find_gage_candidates(path, site.usgs_gage_id)
+    if gage_candidates:
+        return _resolve_candidates(
+            base=base,
+            candidates=gage_candidates,
+            match_value=site.usgs_gage_id,
+            confidence="gage-row-match",
+            evidence_label="USGS gage",
+            prefer_source_priority=True,
+        )
+
+    comid_candidates = _find_comid_candidates(path, site.hydrofabric_feature_id)
+    if comid_candidates:
+        return _resolve_candidates(
+            base=base,
+            candidates=comid_candidates,
+            match_value=site.hydrofabric_feature_id,
+            confidence="comid-row-match",
+            evidence_label="hydrofabric_feature_id",
+            prefer_source_priority=False,
+        )
+
+    return {
+        **base,
+        "evidence": f"no geopackage row matched hydrofabric_feature_id {site.hydrofabric_feature_id} or USGS gage {site.usgs_gage_id}",
+        "candidate_count": 0,
+    }
+
+
+def _resolve_candidates(
+    *,
+    base: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    match_value: str | int,
+    confidence: str,
+    evidence_label: str,
+    prefer_source_priority: bool,
+) -> dict[str, Any]:
+    selected_candidates = candidates
+    if prefer_source_priority:
+        best_priority = min(candidate["source_priority"] for candidate in candidates)
+        selected_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["source_priority"] == best_priority
+        ]
+    unique_targets = sorted(
+        {candidate["troute_feature_id"] for candidate in selected_candidates}
+    )
+    all_unique_targets = sorted(
+        {candidate["troute_feature_id"] for candidate in candidates}
+    )
     if len(unique_targets) == 1:
         candidate = next(
             candidate
-            for candidate in candidates
+            for candidate in selected_candidates
             if candidate["troute_feature_id"] == unique_targets[0]
         )
         return {
             **base,
             "troute_feature_id": int(unique_targets[0]),
             "status": "resolved",
-            "confidence": "exact-row-match",
+            "confidence": confidence,
             "source_table": candidate["table"],
             "source_fields": {
                 "match_field": candidate["match_field"],
@@ -184,30 +251,53 @@ def _resolve_one_site(
             },
             "evidence": (
                 f"{candidate['table']}.{candidate['match_field']} matched "
-                f"{site.hydrofabric_feature_id}; "
-                f"{candidate['target_field']}={unique_targets[0]}"
+                f"{evidence_label} {match_value}; "
+                f"{candidate['target_field']}={candidate['raw_target_value']}"
             ),
             "candidate_count": len(candidates),
-        }
-    if not candidates:
-        return {
-            **base,
-            "evidence": f"no geopackage row matched hydrofabric_feature_id {site.hydrofabric_feature_id}",
-            "candidate_count": 0,
+            "candidate_troute_feature_ids": all_unique_targets,
         }
     return {
         **base,
         "status": "ambiguous",
         "evidence": (
             f"multiple troute feature candidates found for "
-            f"hydrofabric_feature_id {site.hydrofabric_feature_id}: {unique_targets}"
+            f"{evidence_label} {match_value}: {all_unique_targets}"
         ),
         "candidate_count": len(candidates),
-        "candidate_troute_feature_ids": unique_targets,
+        "candidate_troute_feature_ids": all_unique_targets,
     }
 
 
-def _find_candidates(path: Path, hydrofabric_feature_id: int) -> list[dict[str, Any]]:
+def _find_gage_candidates(path: Path, usgs_gage_id: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        connection.row_factory = sqlite3.Row
+        for table in _user_tables(connection):
+            columns = _table_columns(connection, table)
+            match_fields = _gage_fields(columns)
+            target_fields = _target_fields(columns)
+            if not match_fields or not target_fields:
+                continue
+            for match_field in match_fields:
+                for row in _query_gage_rows(
+                    connection=connection,
+                    table=table,
+                    match_field=match_field,
+                    usgs_gage_id=usgs_gage_id,
+                ):
+                    candidate = _candidate_from_row(
+                        row=row,
+                        table=table,
+                        match_field=match_field,
+                        target_fields=target_fields,
+                    )
+                    if candidate is not None:
+                        candidates.append(candidate)
+    return _dedupe_candidates(candidates)
+
+
+def _find_comid_candidates(path: Path, hydrofabric_feature_id: int) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
@@ -219,23 +309,77 @@ def _find_candidates(path: Path, hydrofabric_feature_id: int) -> list[dict[str, 
                 continue
             for match_field in match_fields:
                 query = (
-                    f'SELECT * FROM "{table}" '
-                    f'WHERE CAST("{match_field}" AS TEXT) = ? LIMIT 20'
+                    f"SELECT * FROM {_quote_identifier(table)} "
+                    f"WHERE CAST({_quote_identifier(match_field)} AS TEXT) = ? "
+                    f"OR CAST({_quote_identifier(match_field)} AS INTEGER) = ? "
+                    "LIMIT 50"
                 )
-                for row in connection.execute(query, (str(hydrofabric_feature_id),)):
-                    for target_field in target_fields:
-                        target = _coerce_int(row[target_field])
-                        if target is not None:
-                            candidates.append(
-                                {
-                                    "table": table,
-                                    "match_field": match_field,
-                                    "target_field": target_field,
-                                    "troute_feature_id": target,
-                                }
-                            )
-                            break
-    return candidates
+                for row in connection.execute(
+                    query, (str(hydrofabric_feature_id), int(hydrofabric_feature_id))
+                ):
+                    candidate = _candidate_from_row(
+                        row=row,
+                        table=table,
+                        match_field=match_field,
+                        target_fields=target_fields,
+                    )
+                    if candidate is not None:
+                        candidates.append(candidate)
+    return _dedupe_candidates(candidates)
+
+
+def _query_gage_rows(
+    *,
+    connection: sqlite3.Connection,
+    table: str,
+    match_field: str,
+    usgs_gage_id: str,
+) -> list[sqlite3.Row]:
+    bare_gage = usgs_gage_id.removeprefix("USGS-")
+    terms = [bare_gage, f"USGS-{bare_gage}", f"gages-{bare_gage}"]
+    quoted_field = _quote_identifier(match_field)
+    query = (
+        f"SELECT * FROM {_quote_identifier(table)} "
+        f"WHERE CAST({quoted_field} AS TEXT) IN (?, ?, ?) "
+        f"OR CAST({quoted_field} AS TEXT) LIKE ? "
+        "LIMIT 50"
+    )
+    return list(connection.execute(query, (*terms, f"%{bare_gage}%")))
+
+
+def _candidate_from_row(
+    *,
+    row: sqlite3.Row,
+    table: str,
+    match_field: str,
+    target_fields: list[str],
+) -> dict[str, Any] | None:
+    for target_field in target_fields:
+        target = _extract_troute_feature_id(row[target_field])
+        if target is not None:
+            return {
+                "table": table,
+                "match_field": match_field,
+                "target_field": target_field,
+                "raw_target_value": row[target_field],
+                "troute_feature_id": target,
+                "source_priority": _source_priority(table),
+            }
+    return None
+
+
+def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for candidate in candidates:
+        key = (
+            candidate["table"],
+            candidate["match_field"],
+            candidate["target_field"],
+            str(candidate["raw_target_value"]),
+            candidate["troute_feature_id"],
+        )
+        deduped.setdefault(key, candidate)
+    return list(deduped.values())
 
 
 def _user_tables(connection: sqlite3.Connection) -> list[str]:
@@ -266,6 +410,18 @@ def _match_fields(columns: list[str]) -> list[str]:
     ]
 
 
+def _gage_fields(columns: list[str]) -> list[str]:
+    normalised = {_normalise(column): column for column in columns}
+    exact = [normalised[name] for name in GAGE_FIELD_HINTS if name in normalised]
+    if exact:
+        return sorted(dict.fromkeys(exact))
+    return [
+        column
+        for column in columns
+        if "gage" in _normalise(column) or _normalise(column) in {"hl_link", "hl_uri"}
+    ]
+
+
 def _target_fields(columns: list[str]) -> list[str]:
     normalised = {_normalise(column): column for column in columns}
     ordered = [
@@ -273,14 +429,39 @@ def _target_fields(columns: list[str]) -> list[str]:
         for name in TARGET_FIELD_PRIORITY
         if name in normalised
     ]
-    return list(dict.fromkeys(ordered + columns))
+    return list(dict.fromkeys(ordered))
 
 
 def _normalise(value: str) -> str:
     return value.lower().replace("-", "_")
 
 
-def _coerce_int(value: Any) -> int | None:
+def _source_priority(table: str) -> int:
+    return GAGE_TABLE_PRIORITY.get(_normalise(table), 100)
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _extract_troute_feature_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        match = TROUTE_ID_PATTERN.fullmatch(stripped)
+        if match:
+            return int(match.group(1))
+        try:
+            return int(stripped)
+        except ValueError:
+            try:
+                as_float = float(stripped)
+            except ValueError:
+                return None
+            if as_float.is_integer():
+                return int(as_float)
+            return None
     try:
         return int(value)
     except (TypeError, ValueError):

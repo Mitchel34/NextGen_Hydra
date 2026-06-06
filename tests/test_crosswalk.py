@@ -89,15 +89,84 @@ def test_resolve_site_crosswalk_accepts_field_name_variations(defaults, tmp_path
     }
 
 
+def test_resolve_site_crosswalk_extracts_wb_feature_ids(defaults, tmp_path):
+    _write_gpkg(
+        resource_local_path(tmp_path, resource_key(defaults, "05")),
+        "hydrolocations",
+        ["hl_link TEXT", "id TEXT"],
+        [("03161000", "wb-797343")],
+    )
+
+    crosswalk, report = resolve_site_crosswalk(
+        sites=[mapped_site("05")],
+        defaults=defaults,
+        resource_dir=tmp_path,
+    )
+
+    assert report["status"] == "pass"
+    assert crosswalk["sites"][0]["troute_feature_id"] == 797343
+    assert crosswalk["sites"][0]["confidence"] == "gage-row-match"
+    assert crosswalk["sites"][0]["source_fields"] == {
+        "match_field": "hl_link",
+        "target_field": "id",
+    }
+
+
+def test_resolve_site_crosswalk_prefers_gage_over_ambiguous_comids(defaults, tmp_path):
+    path = resource_local_path(tmp_path, resource_key(defaults, "05"))
+    _write_gpkg(
+        path,
+        "flowpath-attributes",
+        ["gage TEXT", "id TEXT", "link TEXT"],
+        [("03161000", "wb-797343", "wb-797343")],
+    )
+    _write_gpkg(
+        path,
+        "network",
+        ["hf_id INTEGER", "id TEXT"],
+        [(6892192, "wb-794275"), (6892192, "wb-794276")],
+    )
+
+    crosswalk, report = resolve_site_crosswalk(
+        sites=[mapped_site("05")],
+        defaults=defaults,
+        resource_dir=tmp_path,
+    )
+
+    assert report["status"] == "pass"
+    assert crosswalk["sites"][0]["troute_feature_id"] == 797343
+    assert crosswalk["sites"][0]["source_table"] == "flowpath-attributes"
+    assert crosswalk["sites"][0]["candidate_troute_feature_ids"] == [797343]
+
+
+def test_resolve_site_crosswalk_reports_ambiguous_gage_candidates(defaults, tmp_path):
+    _write_gpkg(
+        resource_local_path(tmp_path, resource_key(defaults, "05")),
+        "flowpath-attributes",
+        ["gage TEXT", "id TEXT"],
+        [("03161000", "wb-111"), ("03161000", "wb-222")],
+    )
+
+    crosswalk, report = resolve_site_crosswalk(
+        sites=[mapped_site("05")],
+        defaults=defaults,
+        resource_dir=tmp_path,
+    )
+
+    assert report["status"] == "fail"
+    assert crosswalk["sites"][0]["status"] == "ambiguous"
+    assert crosswalk["sites"][0]["candidate_troute_feature_ids"] == [111, 222]
+
+
 def _write_gpkg(
     path: Path,
     table: str,
     columns: list[str],
-    rows: list[tuple[int, int]],
+    rows: list[tuple[object, ...]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
-        connection.execute(f'CREATE TABLE "{table}" ({", ".join(columns)})')
+        connection.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({", ".join(columns)})')
         names = [column.split()[0] for column in columns]
         placeholders = ", ".join("?" for _name in names)
         connection.executemany(
