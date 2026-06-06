@@ -16,6 +16,13 @@ from .config import (
     proof_download_max_total_bytes,
     require_all_sites_mapped,
 )
+from .crosswalk import (
+    CrosswalkError,
+    load_site_crosswalk,
+    resolve_site_crosswalk,
+    write_crosswalk_report,
+    write_site_crosswalk,
+)
 from .discovery import (
     DiscoveryError,
     run_mapped_site_manifest_discovery,
@@ -42,6 +49,14 @@ from .manifest import (
     write_jsonl,
 )
 from .qc import build_qc_report, write_qc_report
+from .resources import (
+    ResourceError,
+    build_resource_manifest_records,
+    build_resource_manifest_summary,
+    download_resource_manifest_file,
+    write_resource_download_summary,
+    write_resource_manifest_summary,
+)
 from .schema_inspection import (
     SchemaInspectionError,
     assert_schema_inspection_passed,
@@ -61,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         DiscoveryError,
         ManifestError,
         DownloadSafetyError,
+        ResourceError,
+        CrosswalkError,
         SchemaInspectionError,
         TidyError,
     ) as exc:
@@ -181,6 +198,81 @@ def build_parser() -> argparse.ArgumentParser:
     )
     download.set_defaults(func=cmd_download)
 
+    resource_manifest = subcommands.add_parser("build-resource-manifest")
+    resource_manifest.add_argument(
+        "--output",
+        type=Path,
+        default=Path("manifests/resource_manifest.jsonl"),
+    )
+    resource_manifest.add_argument(
+        "--summary-output",
+        type=Path,
+        default=Path("reports/resource_manifest_summary.json"),
+    )
+    resource_manifest.add_argument(
+        "--summary-markdown",
+        type=Path,
+        default=Path("reports/resource_manifest_summary.md"),
+    )
+    resource_manifest.add_argument(
+        "--not-approved-for-download",
+        action="store_true",
+        help="write approved resources with approved_for_download=false",
+    )
+    resource_manifest.set_defaults(func=cmd_build_resource_manifest)
+
+    resource_download = subcommands.add_parser("download-resources")
+    resource_download.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("manifests/resource_manifest.jsonl"),
+    )
+    resource_download.add_argument("--resource-dir", type=Path, default=None)
+    resource_download.add_argument(
+        "--plan-output",
+        type=Path,
+        default=Path("reports/resource_download_plan.jsonl"),
+    )
+    resource_download.add_argument("--provenance", type=Path, default=None)
+    resource_download.add_argument(
+        "--execute",
+        action="store_true",
+        help="execute the approved resource plan; also implied by --approval-id",
+    )
+    resource_download.add_argument("--approval-id", default=None)
+    resource_download.add_argument(
+        "--summary-output",
+        type=Path,
+        default=Path("reports/resource_download_summary.json"),
+    )
+    resource_download.add_argument(
+        "--summary-markdown",
+        type=Path,
+        default=Path("reports/resource_download_summary.md"),
+    )
+    resource_download.set_defaults(func=cmd_download_resources)
+
+    crosswalk = subcommands.add_parser("resolve-site-crosswalk")
+    crosswalk.add_argument(
+        "--sites",
+        type=Path,
+        dest="crosswalk_sites",
+        default=None,
+        help="sites YAML path; defaults to configs/sites.yaml",
+    )
+    crosswalk.add_argument("--resource-dir", type=Path, default=None)
+    crosswalk.add_argument(
+        "--output",
+        type=Path,
+        default=Path("configs/site_crosswalk.yaml"),
+    )
+    crosswalk.add_argument(
+        "--report",
+        type=Path,
+        default=Path("reports/site_crosswalk_report.json"),
+    )
+    crosswalk.set_defaults(func=cmd_resolve_site_crosswalk)
+
     inventory = subcommands.add_parser("inventory")
     inventory.add_argument("--manifest", type=Path, required=False)
     inventory.add_argument("--raw-dir", type=Path, default=None)
@@ -190,6 +282,11 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_schema = subcommands.add_parser("inspect-schema")
     inspect_schema.add_argument("--manifest", type=Path, required=True)
     inspect_schema.add_argument("--raw-dir", type=Path, default=None)
+    inspect_schema.add_argument(
+        "--site-crosswalk",
+        type=Path,
+        default=Path("configs/site_crosswalk.yaml"),
+    )
     inspect_schema.add_argument(
         "--output",
         type=Path,
@@ -207,6 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
     tidy.add_argument("--raw-dir", type=Path, default=None)
     tidy.add_argument("--output-dir", type=Path, default=None)
     tidy.add_argument("--catalog-output", type=Path, default=Path("data/tidy/catalog.jsonl"))
+    tidy.add_argument(
+        "--site-crosswalk",
+        type=Path,
+        default=Path("configs/site_crosswalk.yaml"),
+    )
     tidy.add_argument("--feature-id-column", required=True)
     tidy.add_argument("--time-column", required=True)
     tidy.add_argument("--flow-column", required=True)
@@ -449,6 +551,119 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_resource_manifest(args: argparse.Namespace) -> int:
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
+    records = build_resource_manifest_records(
+        defaults=defaults,
+        sites=sites,
+        approved_for_download=not args.not_approved_for_download,
+    )
+    write_jsonl(args.output, records)
+    summary = build_resource_manifest_summary(
+        records=records,
+        defaults=defaults,
+        manifest_path=args.output,
+    )
+    write_resource_manifest_summary(
+        summary=summary,
+        json_path=args.summary_output,
+        markdown_path=args.summary_markdown,
+    )
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "records": len(records),
+                "unique_objects": summary["unique_object_count"],
+                "total_size_bytes": summary["total_size_bytes"],
+                "summary_output": str(args.summary_output),
+                "summary_markdown": str(args.summary_markdown),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_download_resources(args: argparse.Namespace) -> int:
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
+    resource_dir = args.resource_dir or Path(defaults["paths"]["resources_data_dir"])
+    approval_id = normalize_approval_id(args.approval_id)
+    execute = args.execute or approval_id is not None
+    provenance = args.provenance
+    if provenance is None and execute:
+        provenance = Path(defaults["paths"]["reports_dir"]) / "resource_download_provenance.jsonl"
+    plan = download_resource_manifest_file(
+        manifest_path=args.manifest,
+        resource_dir=resource_dir,
+        defaults=defaults,
+        sites=sites,
+        execute=execute,
+        approval_id=approval_id,
+        plan_output=args.plan_output,
+        provenance_path=provenance,
+    )
+    write_resource_download_summary(
+        path=args.summary_output,
+        markdown_path=args.summary_markdown,
+        manifest_path=args.manifest,
+        plan_output=args.plan_output,
+        provenance_path=provenance,
+        approval_id=approval_id if execute else None,
+        mode="execute" if execute else "dry-run",
+        plan=plan,
+    )
+    print(
+        json.dumps(
+            {
+                "mode": "execute" if execute else "dry-run",
+                "plan_output": str(args.plan_output),
+                "summary_output": str(args.summary_output),
+                "summary_markdown": str(args.summary_markdown),
+                "provenance": str(provenance) if provenance else None,
+                "actions": _count_actions(plan),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_resolve_site_crosswalk(args: argparse.Namespace) -> int:
+    defaults, sites = load_project(
+        args.root,
+        args.defaults,
+        args.crosswalk_sites or args.sites,
+    )
+    require_all_sites_mapped(sites)
+    resource_dir = args.resource_dir or Path(defaults["paths"]["resources_data_dir"])
+    crosswalk, report = resolve_site_crosswalk(
+        sites=sites,
+        defaults=defaults,
+        resource_dir=resource_dir,
+    )
+    write_site_crosswalk(args.output, crosswalk)
+    write_crosswalk_report(args.report, report)
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "output": str(args.output),
+                "report": str(args.report),
+                "resolved_count": report["resolved_count"],
+                "site_count": report["site_count"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_inventory(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
@@ -464,11 +679,13 @@ def cmd_inspect_schema(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
+    site_crosswalk = _load_crosswalk_if_present(args.site_crosswalk)
     report = build_schema_inspection_report(
         manifest_records=read_jsonl(args.manifest),
         defaults=defaults,
         sites=sites,
         raw_dir=raw_dir,
+        site_crosswalk=site_crosswalk,
     )
     write_schema_inspection_report(
         report=report,
@@ -497,6 +714,7 @@ def cmd_tidy(args: argparse.Namespace) -> int:
     raw_dir = args.raw_dir or Path(defaults["paths"]["raw_data_dir"])
     output_dir = args.output_dir or Path(defaults["paths"]["tidy_data_dir"])
     manifest = read_jsonl(args.manifest)
+    site_crosswalk = load_site_crosswalk(args.site_crosswalk)
     catalog = tidy_manifest_records(
         manifest_records=manifest,
         defaults=defaults,
@@ -508,6 +726,8 @@ def cmd_tidy(args: argparse.Namespace) -> int:
         flow_units=args.flow_units,
         output_format=args.output_format,
         sites=sites,
+        site_crosswalk=site_crosswalk,
+        require_crosswalk=True,
     )
     write_jsonl(args.catalog_output, catalog)
     print(
@@ -549,6 +769,12 @@ def cmd_future(args: argparse.Namespace) -> int:
 
 def _load(args: argparse.Namespace):
     return load_project(args.root, args.defaults, args.sites)
+
+
+def _load_crosswalk_if_present(path: Path | None) -> dict[str, object] | None:
+    if path is None or not path.exists():
+        return None
+    return load_site_crosswalk(path)
 
 
 def _read_json(path: Path) -> dict[str, object]:

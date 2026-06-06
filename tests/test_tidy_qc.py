@@ -41,6 +41,7 @@ def test_normalise_rows_requires_explicit_schema(defaults):
 
     assert len(tidy) == 1
     assert tidy[0]["streamflow"] == 1.2
+    assert tidy[0]["troute_feature_id"] == 6892192
     assert tidy[0]["source_manifest_ref"] == "source.parquet"
 
 
@@ -145,6 +146,62 @@ def test_tidy_skips_metadata_rows(defaults, approved_object, approved_metadata_o
     assert len(catalog) == 1
     assert read_paths == [raw_path]
     assert catalog[0]["product_type"] == "troute_streamflow_output"
+
+
+def test_tidy_uses_resolved_troute_feature_id(
+    defaults, approved_object, tmp_path, monkeypatch
+):
+    site = mapped_site()
+    troute_feature_id = 123456
+    manifest = build_manifest_records([approved_object], [site], defaults)
+    raw_path = tmp_path / "raw" / approved_object["key"]
+    raw_path.parent.mkdir(parents=True)
+    raw_path.write_text("fixture", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nextgen_hydra.tidy._read_source_rows",
+        lambda *_args: [
+            {
+                "feature_id": troute_feature_id,
+                "time": "2026-05-22T01:00:00Z",
+                "streamflow": 1.0,
+            },
+            {
+                "feature_id": site.hydrofabric_feature_id,
+                "time": "2026-05-22T01:00:00Z",
+                "streamflow": 99.0,
+            },
+        ],
+    )
+
+    catalog = tidy_manifest_records(
+        manifest_records=manifest,
+        defaults=defaults,
+        raw_dir=tmp_path / "raw",
+        output_dir=tmp_path / "tidy",
+        feature_id_column="feature_id",
+        time_column="time",
+        flow_column="streamflow",
+        flow_units="m3 s-1",
+        output_format="csv",
+        sites=[site],
+        site_crosswalk={
+            "version": 1,
+            "status": "resolved",
+            "sites": [
+                {
+                    "site_id": site.site_id,
+                    "troute_feature_id": troute_feature_id,
+                    "status": "resolved",
+                }
+            ],
+        },
+        require_crosswalk=True,
+    )
+
+    assert catalog[0]["hydrofabric_feature_id"] == site.hydrofabric_feature_id
+    assert catalog[0]["troute_feature_id"] == troute_feature_id
+    assert catalog[0]["row_count"] == 1
 
 
 def test_tidy_requires_per_site_feature_coverage(defaults, approved_object, tmp_path, monkeypatch):

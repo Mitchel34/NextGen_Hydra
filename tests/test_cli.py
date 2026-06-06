@@ -64,3 +64,54 @@ def test_download_cli_approval_id_implies_execute(
     assert (tmp_path / "inventory.jsonl").is_file()
     assert (tmp_path / "download_summary.json").is_file()
     assert (tmp_path / "download_summary.md").is_file()
+
+
+def test_resource_download_cli_approval_id_implies_execute(
+    repo_root, tmp_path, monkeypatch
+):
+    manifest_path = tmp_path / "resource_manifest.jsonl"
+    manifest_path.write_text("", encoding="utf-8")
+    calls = {}
+
+    def fake_download_resource_manifest_file(**kwargs):
+        calls.update(kwargs)
+        return [
+            {
+                "action": "download",
+                "size_bytes": 9,
+                "object_key": "resources/example.gpkg",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "nextgen_hydra.cli.download_resource_manifest_file",
+        fake_download_resource_manifest_file,
+    )
+
+    code = main(
+        [
+            "--root",
+            str(repo_root),
+            "download-resources",
+            "--manifest",
+            str(manifest_path),
+            "--resource-dir",
+            str(tmp_path / "resources"),
+            "--approval-id",
+            "RESOURCE_APPROVAL",
+            "--plan-output",
+            str(tmp_path / "resource_download_plan.jsonl"),
+            "--provenance",
+            str(tmp_path / "resource_download_provenance.jsonl"),
+            "--summary-output",
+            str(tmp_path / "resource_download_summary.json"),
+            "--summary-markdown",
+            str(tmp_path / "resource_download_summary.md"),
+        ]
+    )
+
+    assert code == 0
+    assert calls["execute"] is True
+    assert calls["approval_id"] == "RESOURCE_APPROVAL"
+    assert (tmp_path / "resource_download_summary.json").is_file()
+    assert (tmp_path / "resource_download_summary.md").is_file()

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .config import Site
+from .crosswalk import crosswalk_by_site, require_resolved_crosswalk
 from .download import safe_local_path
 from .manifest import validate_manifest_records
 
@@ -28,7 +29,7 @@ def normalise_rows(
 ) -> list[dict[str, Any]]:
     """Filter explicit-schema rows to one site and normalize column names."""
 
-    feature_id = str(site["hydrofabric_feature_id"])
+    feature_id = str(site.get("troute_feature_id") or site["hydrofabric_feature_id"])
     tidy_rows: list[dict[str, Any]] = []
     for row in source_rows:
         missing = [
@@ -45,6 +46,7 @@ def normalise_rows(
                 "site_id": site["site_id"],
                 "usgs_gage_id": site["usgs_gage_id"],
                 "hydrofabric_feature_id": int(site["hydrofabric_feature_id"]),
+                "troute_feature_id": int(site.get("troute_feature_id") or site["hydrofabric_feature_id"]),
                 "vpu_id": manifest_record["vpu_id"],
                 "stream": manifest_record["stream"],
                 "run_date": manifest_record["run_date"],
@@ -72,11 +74,19 @@ def tidy_manifest_records(
     flow_units: str,
     output_format: str = "parquet",
     sites: list[Site] | None = None,
+    site_crosswalk: dict[str, Any] | None = None,
+    require_crosswalk: bool = False,
 ) -> list[dict[str, Any]]:
     """Transform validated approved raw records using explicit schema arguments."""
 
     validated = validate_manifest_records(manifest_records, defaults, sites=sites)
     data_records = _tidy_data_records(validated)
+    if require_crosswalk:
+        require_resolved_crosswalk(
+            crosswalk=site_crosswalk or {},
+            site_ids={str(record["site_id"]) for record in data_records},
+        )
+    crosswalk_records = crosswalk_by_site(site_crosswalk)
     output_dir.mkdir(parents=True, exist_ok=True)
     catalog: list[dict[str, Any]] = []
     for record in data_records:
@@ -88,6 +98,7 @@ def tidy_manifest_records(
             "site_id": record["site_id"],
             "usgs_gage_id": record["usgs_gage_id"],
             "hydrofabric_feature_id": record["hydrofabric_feature_id"],
+            "troute_feature_id": _troute_feature_id_for_record(record, crosswalk_records),
         }
         tidy_rows = normalise_rows(
             source_rows,
@@ -133,6 +144,7 @@ def build_catalog_record(
         "site_id": record["site_id"],
         "usgs_gage_id": record["usgs_gage_id"],
         "hydrofabric_feature_id": record["hydrofabric_feature_id"],
+        "troute_feature_id": _catalog_troute_feature_id(record, tidy_rows),
         "vpu_id": record["vpu_id"],
         "product_type": record["product_type"],
         "stream": record["stream"],
@@ -171,6 +183,25 @@ def _tidy_data_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not data_records:
         raise TidyError("manifest contains no troute_streamflow_output rows to tidy")
     return data_records
+
+
+def _troute_feature_id_for_record(
+    record: dict[str, Any],
+    crosswalk_records: dict[str, dict[str, Any]],
+) -> int:
+    crosswalk_record = crosswalk_records.get(str(record["site_id"]))
+    if crosswalk_record and crosswalk_record.get("status") == "resolved":
+        return int(crosswalk_record["troute_feature_id"])
+    return int(record["hydrofabric_feature_id"])
+
+
+def _catalog_troute_feature_id(
+    record: dict[str, Any],
+    tidy_rows: list[dict[str, Any]],
+) -> int:
+    if tidy_rows and tidy_rows[0].get("troute_feature_id") not in (None, ""):
+        return int(tidy_rows[0]["troute_feature_id"])
+    return int(record.get("troute_feature_id") or record["hydrofabric_feature_id"])
 
 
 def _require_per_site_coverage(

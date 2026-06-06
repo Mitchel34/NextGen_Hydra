@@ -22,6 +22,12 @@ data = [
   "xarray>=2024.1",
   "netCDF4>=1.6",
 ]
+web = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "httpx>=0.27",
+]
 
 [project.scripts]
 nextgen-hydra = "nextgen_hydra.cli:main"

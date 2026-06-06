@@ -1,0 +1,51 @@
+version: 1
+status: unresolved
+generated_at_utc: null
+sites:
+  - site_id: south_fork_new_river_near_jefferson_nc
+    usgs_gage_id: "03161000"
+    hydrofabric_feature_id: 6892192
+    vpu_id: "05"
+    troute_feature_id: null
+    status: unresolved
+    confidence: none
+    source_resource_key: null
+    source_table: null
+    source_fields: {}
+    evidence: "Pending approved VPU_05 hydrofabric geopackage crosswalk resolution."
+
+  - site_id: new_river_near_galax_va
+    usgs_gage_id: "03164000"
+    hydrofabric_feature_id: 6887572
+    vpu_id: "05"
+    troute_feature_id: null
+    status: unresolved
+    confidence: none
+    source_resource_key: null
+    source_table: null
+    source_fields: {}
+    evidence: "Pending approved VPU_05 hydrofabric geopackage crosswalk resolution."
+
+  - site_id: watauga_river_near_sugar_grove_nc
+    usgs_gage_id: "03479000"
+    hydrofabric_feature_id: 19743430
+    vpu_id: "06"
+    troute_feature_id: null
+    status: unresolved
+    confidence: none
+    source_resource_key: null
+    source_table: null
+    source_fields: {}
+    evidence: "Pending approved VPU_06 hydrofabric geopackage crosswalk resolution."
+
+  - site_id: watauga_river_at_elizabethton_tn
+    usgs_gage_id: "03486000"
+    hydrofabric_feature_id: 19745222
+    vpu_id: "06"
+    troute_feature_id: null
+    status: unresolved
+    confidence: none
+    source_resource_key: null
+    source_table: null
+    source_fields: {}
+    evidence: "Pending approved VPU_06 hydrofabric geopackage crosswalk resolution."

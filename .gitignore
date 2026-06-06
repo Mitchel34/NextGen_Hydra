@@ -11,12 +11,18 @@ dist/
 
 # Project data and generated artifacts. These must not be committed.
 data/raw/
+data/resources/
 data/tidy/
 data/inventory/
 data/provenance/
 data/cache/
+data/exports/
 manifests/*.jsonl
 reports/*.json
 reports/*.jsonl
 reports/*.md
 *.part
+
+# Web app build artifacts.
+apps/web/node_modules/
+apps/web/dist/

@@ -63,6 +63,7 @@ REQUIRED_DATA_CATALOG_FIELDS = (
     "site_id",
     "usgs_gage_id",
     "hydrofabric_feature_id",
+    "troute_feature_id",
     "vpu_id",
     "product_type",
     "stream",

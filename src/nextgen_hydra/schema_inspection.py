@@ -10,6 +10,7 @@ import re
 from typing import Any, Iterable
 
 from .config import Site
+from .crosswalk import crosswalk_by_site
 from .download import safe_local_path
 from .manifest import validate_manifest_records
 
@@ -24,6 +25,7 @@ def build_schema_inspection_report(
     defaults: dict[str, Any],
     sites: list[Site],
     raw_dir: Path,
+    site_crosswalk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validated = validate_manifest_records(manifest_records, defaults, sites=sites)
     troute_records = [
@@ -34,9 +36,20 @@ def build_schema_inspection_report(
     errors: list[str] = []
     if not troute_records:
         errors.append("manifest contains no troute_streamflow_output records")
+    crosswalk_records = crosswalk_by_site(site_crosswalk)
+    if site_crosswalk is not None:
+        for record in troute_records:
+            site_id = str(record["site_id"])
+            crosswalk_record = crosswalk_records.get(site_id)
+            if (
+                crosswalk_record is None
+                or crosswalk_record.get("status") != "resolved"
+                or crosswalk_record.get("troute_feature_id") in (None, "")
+            ):
+                errors.append(f"{site_id}: troute_feature_id is not resolved in site crosswalk")
 
     objects: list[dict[str, Any]] = []
-    for group in _group_by_object(troute_records):
+    for group in _group_by_object(troute_records, crosswalk_records):
         local_path = safe_local_path(raw_dir, group["object_key"])
         if not local_path.exists():
             message = f"raw file is missing for schema inspection: {local_path}"
@@ -71,6 +84,7 @@ def build_schema_inspection_report(
         "status": "pass" if not unique_errors else "fail",
         "errors": unique_errors,
         "object_count": len(objects),
+        "crosswalk_status": None if site_crosswalk is None else site_crosswalk.get("status"),
         "objects": objects,
         "by_site": by_site,
     }
@@ -132,7 +146,10 @@ def render_schema_inspection_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _group_by_object(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_by_object(
+    records: list[dict[str, Any]],
+    crosswalk_records: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for record in records:
         group = grouped.setdefault(
@@ -148,11 +165,19 @@ def _group_by_object(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "sites": [],
             },
         )
+        crosswalk_record = crosswalk_records.get(str(record["site_id"]))
+        troute_feature_id = (
+            None if crosswalk_record is None else crosswalk_record.get("troute_feature_id")
+        )
+        target_feature_id = troute_feature_id or record["hydrofabric_feature_id"]
         group["sites"].append(
             {
                 "site_id": record["site_id"],
                 "usgs_gage_id": record["usgs_gage_id"],
                 "hydrofabric_feature_id": int(record["hydrofabric_feature_id"]),
+                "troute_feature_id": None if troute_feature_id in (None, "") else int(troute_feature_id),
+                "target_feature_id": int(target_feature_id),
+                "crosswalk_status": None if crosswalk_record is None else crosswalk_record.get("status"),
             }
         )
     return list(grouped.values())
@@ -182,7 +207,7 @@ def _failed_object(
         "target_feature_coverage": {
             "present_feature_ids": [],
             "absent_feature_ids": [
-                site["hydrofabric_feature_id"] for site in group["sites"]
+                site["target_feature_id"] for site in group["sites"]
             ],
             "feature_row_counts": {},
         },
@@ -288,7 +313,7 @@ def _inspect_table(
     time_column = time_candidates[0] if len(time_candidates) == 1 else None
     flow_column = flow_candidates[0] if len(flow_candidates) == 1 else None
 
-    target_ids = [site["hydrofabric_feature_id"] for site in group["sites"]]
+    target_ids = [site["target_feature_id"] for site in group["sites"]]
     coverage = _empty_coverage(target_ids)
     site_reports: dict[str, Any] = {}
     duplicate_timestamp_count = None
@@ -426,7 +451,7 @@ def _site_schema_report(
     feature_column: str,
     time_column: str | None,
 ) -> dict[str, Any]:
-    feature_id = str(site["hydrofabric_feature_id"])
+    feature_id = str(site["target_feature_id"])
     rows = table[table[feature_column].astype(str) == feature_id]
     time_coverage = _time_coverage(rows[time_column]) if time_column else {}
     duplicate_count = (
@@ -435,6 +460,9 @@ def _site_schema_report(
     return {
         "site_id": site["site_id"],
         "hydrofabric_feature_id": int(site["hydrofabric_feature_id"]),
+        "troute_feature_id": site.get("troute_feature_id"),
+        "target_feature_id": int(site["target_feature_id"]),
+        "crosswalk_status": site.get("crosswalk_status"),
         "status": "pass" if len(rows) > 0 else "fail",
         "row_count": int(len(rows)),
         "time_coverage": time_coverage,
@@ -474,6 +502,9 @@ def _summarize_sites(
             {
                 "usgs_gage_id": record["usgs_gage_id"],
                 "hydrofabric_feature_id": int(record["hydrofabric_feature_id"]),
+                "troute_feature_id": None,
+                "target_feature_id": int(record["hydrofabric_feature_id"]),
+                "crosswalk_status": None,
                 "vpu_id": record["vpu_id"],
                 "objects_expected": 0,
                 "objects_present": 0,
@@ -490,6 +521,9 @@ def _summarize_sites(
     for obj in objects:
         for site_id, site_report in obj.get("by_site", {}).items():
             target = summary[site_id]
+            target["troute_feature_id"] = site_report.get("troute_feature_id")
+            target["target_feature_id"] = site_report.get("target_feature_id")
+            target["crosswalk_status"] = site_report.get("crosswalk_status")
             if site_report["status"] == "pass":
                 target["objects_present"] += 1
             target["row_count"] += int(site_report.get("row_count") or 0)

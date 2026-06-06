@@ -24,6 +24,12 @@ Optional schema inspection and tidy transforms for real Parquet/NetCDF files req
 .venv/bin/python -m pip install '.[data]'
 ```
 
+Optional public API and React portal dependencies:
+
+```bash
+.venv/bin/python -m pip install '.[web]'
+```
+
 ## Safety Status
 
 Current `configs/sites.yaml` has verified VPU mappings for all four sites:
@@ -83,15 +89,18 @@ approved troute/metadata prefixes; no object bodies are downloaded:
   --manifest manifests/manifest.jsonl
 ```
 
-Milestone 4 pre-download workflow:
+Milestone 4 NRDS pre-download workflow:
 
 1. Validate config.
 2. Validate the manifest against `configs/sites.yaml`.
 3. Run a dry-run download plan.
 4. Execute only after a concrete `--approval-id` is available.
 5. Inventory downloaded raw files.
-6. Inspect the raw troute schema.
-7. Run tidy only after schema inspection is approved.
+6. Download approved hydrofabric resource GPKGs through the separate resource
+   workflow.
+7. Resolve the site crosswalk from configured COMIDs to troute feature IDs.
+8. Inspect the raw troute schema with `configs/site_crosswalk.yaml`.
+9. Run tidy only after schema inspection and units are approved.
 
 Validate and dry-run:
 
@@ -103,7 +112,9 @@ Validate and dry-run:
 
 .venv/bin/nextgen-hydra download \
   --manifest manifests/manifest.jsonl \
-  --plan-output reports/download_plan.jsonl
+  --plan-output reports/download_plan.jsonl \
+  --summary-output reports/milestone4_download_summary.json \
+  --summary-markdown reports/milestone4_download_summary.md
 ```
 
 Real downloads require an explicit concrete `--approval-id`; without it, the
@@ -131,25 +142,69 @@ Inventory and schema inspection:
 .venv/bin/nextgen-hydra inventory \
   --manifest manifests/manifest.jsonl \
   --output data/inventory/inventory.jsonl
+```
 
+Hydrofabric resource workflow for site crosswalk resolution. This is separate
+from NRDS output/metadata downloads and allows only the configured
+`VPU_05`/`VPU_06` geopackages:
+
+```bash
+.venv/bin/nextgen-hydra build-resource-manifest \
+  --output manifests/resource_manifest.jsonl \
+  --summary-output reports/resource_manifest_summary.json \
+  --summary-markdown reports/resource_manifest_summary.md
+
+.venv/bin/nextgen-hydra download-resources \
+  --manifest manifests/resource_manifest.jsonl \
+  --plan-output reports/resource_download_plan.jsonl \
+  --summary-output reports/resource_download_summary.json \
+  --summary-markdown reports/resource_download_summary.md
+```
+
+Real resource downloads also require a concrete approval ID:
+
+```bash
+.venv/bin/nextgen-hydra download-resources \
+  --manifest manifests/resource_manifest.jsonl \
+  --approval-id APPROVED_RESOURCE_DOWNLOAD_YYYYMMDD \
+  --plan-output reports/resource_download_plan.jsonl \
+  --summary-output reports/resource_download_summary.json \
+  --summary-markdown reports/resource_download_summary.md
+```
+
+Resolve the crosswalk only after the approved GPKGs are present:
+
+```bash
+.venv/bin/nextgen-hydra resolve-site-crosswalk \
+  --sites configs/sites.yaml \
+  --resource-dir data/resources \
+  --output configs/site_crosswalk.yaml \
+  --report reports/site_crosswalk_report.json
+```
+
+Inspect raw troute schema with resolved troute feature IDs:
+
+```bash
 .venv/bin/nextgen-hydra inspect-schema \
   --manifest manifests/manifest.jsonl \
   --raw-dir data/raw \
+  --site-crosswalk configs/site_crosswalk.yaml \
   --output reports/schema_inspection.json \
   --markdown reports/schema_inspection.md
 ```
 
 Run tidy only after `reports/schema_inspection.json` has status `pass` and the
-feature/time/streamflow column choices are approved:
+feature/time/flow column choices and streamflow units are approved:
 
 ```bash
 .venv/bin/nextgen-hydra tidy \
   --manifest manifests/manifest.jsonl \
   --raw-dir data/raw \
   --catalog-output data/tidy/catalog.jsonl \
+  --site-crosswalk configs/site_crosswalk.yaml \
   --feature-id-column feature_id \
   --time-column time \
-  --flow-column streamflow \
+  --flow-column flow \
   --flow-units "m3 s-1"
 ```
 
@@ -163,6 +218,28 @@ download summary:
   --catalog data/tidy/catalog.jsonl \
   --schema-inspection reports/schema_inspection.json \
   --download-summary reports/milestone4_download_summary.json
+```
+
+## Public Portal
+
+The public portal starts as local-file-backed FastAPI plus React/Vite. It serves
+only CLI-produced artifacts and cached tidy/export files; it has no public route
+that can run discovery, resource download, NRDS download, approval submission, or
+crosswalk resolution. The file contracts are documented in
+`docs/public_api_file_contracts.md`.
+
+Run the API:
+
+```bash
+.venv/bin/python -m uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Run the web app:
+
+```bash
+cd apps/web
+npm install
+npm run dev
 ```
 
 ## Tests

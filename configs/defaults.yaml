@@ -83,7 +83,9 @@ paths:
   manifests_dir: manifests
   reports_dir: reports
   raw_data_dir: data/raw
+  resources_data_dir: data/resources
   tidy_data_dir: data/tidy
   inventory_dir: data/inventory
   provenance_dir: data/provenance
   cache_dir: data/cache
+  exports_dir: data/exports

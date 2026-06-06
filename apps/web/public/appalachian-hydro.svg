@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" role="img" aria-label="Appalachian watershed relief map">
+  <rect width="960" height="360" fill="#eef3ed"/>
+  <path d="M0 250 C110 220 165 285 278 248 C360 220 407 150 510 170 C624 193 672 95 780 120 C840 135 895 185 960 160 L960 360 L0 360 Z" fill="#6f8f6a"/>
+  <path d="M0 286 C120 268 185 320 300 283 C390 254 450 195 560 215 C650 232 708 158 805 175 C870 186 918 230 960 218 L960 360 L0 360 Z" fill="#335c67" opacity="0.86"/>
+  <path d="M0 316 C132 305 212 340 330 315 C432 293 505 250 604 267 C700 282 752 222 850 236 C905 244 934 264 960 258 L960 360 L0 360 Z" fill="#1d3557" opacity="0.82"/>
+  <path d="M118 32 C168 64 166 103 225 125 C303 154 332 108 396 139 C464 172 438 228 517 245 C606 264 655 214 740 248 C807 274 808 320 890 337" fill="none" stroke="#2a9d8f" stroke-width="9" stroke-linecap="round"/>
+  <path d="M130 32 C180 64 178 99 232 116 C307 140 335 96 404 132 C475 169 449 218 524 234 C612 253 660 204 747 238 C816 265 818 309 900 326" fill="none" stroke="#d7f4ee" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="225" cy="125" r="9" fill="#f4a261"/>
+  <circle cx="517" cy="245" r="9" fill="#f4a261"/>
+  <circle cx="740" cy="248" r="9" fill="#f4a261"/>
+  <circle cx="890" cy="337" r="9" fill="#f4a261"/>
+</svg>
