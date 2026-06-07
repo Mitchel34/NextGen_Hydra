@@ -102,7 +102,15 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 def load_defaults(path: Path) -> dict[str, Any]:
     defaults = load_yaml(path)
-    for section in ("nrds", "metadata", "classifier", "safety", "download", "paths"):
+    for section in (
+        "nrds",
+        "metadata",
+        "classifier",
+        "safety",
+        "resource_download",
+        "download",
+        "paths",
+    ):
         if section not in defaults or not isinstance(defaults[section], dict):
             raise ConfigError(f"defaults missing required section: {section}")
     nrds = defaults["nrds"]
@@ -229,6 +237,16 @@ def proof_download_max_object_bytes(defaults: dict[str, Any]) -> int:
 
 def proof_download_max_total_bytes(defaults: dict[str, Any]) -> int:
     mb = defaults["safety"]["proof_download_max_total_mb"]
+    return int(mb) * 1024 * 1024
+
+
+def resource_download_max_object_bytes(defaults: dict[str, Any]) -> int:
+    mb = defaults["resource_download"]["resource_max_object_mb"]
+    return int(mb) * 1024 * 1024
+
+
+def resource_download_max_total_bytes(defaults: dict[str, Any]) -> int:
+    mb = defaults["resource_download"]["resource_max_total_mb"]
     return int(mb) * 1024 * 1024
 
 

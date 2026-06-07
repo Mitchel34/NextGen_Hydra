@@ -79,7 +79,7 @@ h1 {
   max-width: 1220px;
   margin: 24px auto 16px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -237,6 +237,24 @@ legend {
   padding: 9px;
 }
 
+.columnGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.miniCheck {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #e2e7e4;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -275,7 +293,7 @@ button:disabled {
 .tableHeader,
 .tableRow {
   display: grid;
-  grid-template-columns: 1fr 1.7fr 70px 110px;
+  grid-template-columns: 1fr 1.45fr 60px 130px 110px;
   gap: 10px;
   align-items: center;
   padding: 11px 12px;
@@ -291,6 +309,11 @@ button:disabled {
 .tableRow {
   border-top: 1px solid #e8ecea;
   min-height: 46px;
+}
+
+.gateStack {
+  display: grid;
+  gap: 3px;
 }
 
 .inspection,
@@ -311,6 +334,25 @@ button:disabled {
   color: #8a3b12;
   font-size: 14px;
   line-height: 1.35;
+}
+
+.qcGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.qcItem {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid #e2e7e4;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.qcItem span {
+  color: #5a6470;
 }
 
 .downloadLink {

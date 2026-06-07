@@ -193,8 +193,11 @@ Inspect raw troute schema with resolved troute feature IDs:
   --markdown reports/schema_inspection.md
 ```
 
-Run tidy only after `reports/schema_inspection.json` has status `pass` and the
-feature/time/flow column choices and streamflow units are approved:
+Run tidy only after `reports/schema_inspection.json` has status `pass`,
+feature/time/flow column choices are approved, and
+`configs/streamflow_units.yaml` records documented authoritative units evidence.
+The approved slice uses documented `flow` units of `m3 s-1`; see
+`docs/streamflow_units_evidence.md` for the local units-evidence audit.
 
 ```bash
 .venv/bin/nextgen-hydra tidy \
@@ -205,8 +208,26 @@ feature/time/flow column choices and streamflow units are approved:
   --feature-id-column feature_id \
   --time-column time \
   --flow-column flow \
-  --flow-units "m3 s-1"
+  --flow-units "<documented-units>" \
+  --units-config configs/streamflow_units.yaml
 ```
+
+Plan a bounded backfill without downloading object bodies:
+
+```bash
+.venv/bin/nextgen-hydra plan-backfill \
+  --start-date 20260517 \
+  --end-date 20260523 \
+  --run-type short_range \
+  --cycle 00 \
+  --manifest-output manifests/backfill_manifest.jsonl \
+  --discovery-output reports/backfill_discovery.jsonl \
+  --summary-output reports/backfill_plan_summary.json \
+  --summary-markdown reports/backfill_plan_summary.md
+```
+
+Backfill downloads still require a separate explicit approval ID and the normal
+download dry-run/execute workflow.
 
 QC consumes the manifest, inventory, tidy catalog, schema inspection, and
 download summary:

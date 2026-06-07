@@ -68,6 +68,15 @@ safety:
   require_explicit_approval_for_full_historical_download: true
   require_explicit_approval_for_oversized_objects: true
 
+resource_download:
+  resource_max_object_mb: 300
+  resource_max_total_mb: 400
+  expected_object_count: 2
+  expected_total_bytes: 340148224
+  expected_keys:
+    - resources/v2.2_hydrofabric/geopackages/VPU_05/nextgen_VPU_05.gpkg
+    - resources/v2.2_hydrofabric/geopackages/VPU_06/nextgen_VPU_06.gpkg
+
 download:
   dry_run_first: true
   require_manifest: true

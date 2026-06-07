@@ -6,7 +6,8 @@ import {
   Download,
   FileSearch,
   Filter,
-  RefreshCw
+  RefreshCw,
+  ShieldCheck
 } from "lucide-react";
 
 const API_ROOT = "";
@@ -21,7 +22,7 @@ async function fetchJson(path, options) {
 }
 
 function statusTone(status) {
-  if (status === "pass" || status === "resolved") return "good";
+  if (["pass", "resolved", "documented", "available", "ready"].includes(status)) return "good";
   if (status === "missing") return "muted";
   return "warn";
 }
@@ -29,12 +30,19 @@ function statusTone(status) {
 export default function App() {
   const [sites, setSites] = useState([]);
   const [datasets, setDatasets] = useState([]);
+  const [status, setStatus] = useState({ status: "loading" });
+  const [qc, setQc] = useState({ status: "loading", per_site: {} });
+  const [units, setUnits] = useState({ status: "loading", evidence: [] });
+  const [exportOptions, setExportOptions] = useState({ columns: [], preprocessing: {} });
   const [schema, setSchema] = useState({ status: "loading", errors: [] });
   const [selectedSites, setSelectedSites] = useState(new Set());
   const [selectedStreams, setSelectedStreams] = useState(new Set());
+  const [selectedColumns, setSelectedColumns] = useState(new Set());
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [format, setFormat] = useState("csv");
+  const [missingStreamflow, setMissingStreamflow] = useState("keep");
+  const [aggregation, setAggregation] = useState("none");
   const [preview, setPreview] = useState(null);
   const [exportResult, setExportResult] = useState(null);
   const [error, setError] = useState("");
@@ -44,6 +52,7 @@ export default function App() {
     () => Array.from(new Set(datasets.map((dataset) => dataset.stream))).sort(),
     [datasets]
   );
+  const tidyReady = datasets.some((dataset) => dataset.tidy_available);
   const exportReady = datasets.some((dataset) => dataset.export_available);
 
   useEffect(() => {
@@ -54,16 +63,25 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [siteData, datasetData, schemaData] = await Promise.all([
+      const [statusData, siteData, datasetData, schemaData, qcData, unitsData, optionsData] = await Promise.all([
+        fetchJson("/api/status"),
         fetchJson("/api/sites"),
         fetchJson("/api/datasets"),
-        fetchJson("/api/schema-inspection")
+        fetchJson("/api/schema-inspection"),
+        fetchJson("/api/qc"),
+        fetchJson("/api/units"),
+        fetchJson("/api/export-options")
       ]);
+      setStatus(statusData || { status: "missing" });
       setSites(siteData.sites || []);
       setDatasets(datasetData.datasets || []);
       setSchema(schemaData || { status: "missing", errors: [] });
+      setQc(qcData || { status: "missing", per_site: {} });
+      setUnits(unitsData || { status: "missing", evidence: [] });
+      setExportOptions(optionsData || { columns: [], preprocessing: {} });
       setSelectedSites(new Set((siteData.sites || []).map((site) => site.site_id)));
       setSelectedStreams(new Set((datasetData.datasets || []).map((dataset) => dataset.stream)));
+      setSelectedColumns(new Set((optionsData.columns || [])));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -87,13 +105,26 @@ export default function App() {
     });
   }
 
+  function toggleColumn(column) {
+    setSelectedColumns((current) => {
+      const next = new Set(current);
+      next.has(column) ? next.delete(column) : next.add(column);
+      return next;
+    });
+  }
+
   function payload() {
     return {
       site_ids: Array.from(selectedSites),
       streams: Array.from(selectedStreams),
       start_time_utc: startTime || null,
       end_time_utc: endTime || null,
-      format
+      format,
+      columns: Array.from(selectedColumns),
+      preprocessing: {
+        missing_streamflow: missingStreamflow,
+        aggregation
+      }
     };
   }
 
@@ -152,10 +183,22 @@ export default function App() {
       <section className="statusStrip" aria-label="Artifact status">
         <StatusChip icon={<Database size={16} />} label="Datasets" value={datasets.length} tone="muted" />
         <StatusChip
+          icon={<ShieldCheck size={16} />}
+          label="Status"
+          value={status.status}
+          tone={status.status === "ready" ? "good" : "warn"}
+        />
+        <StatusChip
           icon={<FileSearch size={16} />}
           label="Schema"
           value={schema.status}
           tone={statusTone(schema.status)}
+        />
+        <StatusChip
+          icon={tidyReady ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+          label="Tidy"
+          value={tidyReady ? "ready" : "blocked"}
+          tone={tidyReady ? "good" : "warn"}
         />
         <StatusChip
           icon={exportReady ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
@@ -237,6 +280,54 @@ export default function App() {
             </div>
           </fieldset>
 
+          <fieldset>
+            <legend>Clean</legend>
+            <div className="segmented">
+              {["keep", "drop"].map((value) => (
+                <button
+                  key={value}
+                  className={missingStreamflow === value ? "selected" : ""}
+                  onClick={() => setMissingStreamflow(value)}
+                  type="button"
+                >
+                  {value === "keep" ? "Keep Missing" : "Drop Missing"}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Aggregate</legend>
+            <div className="segmented">
+              {["none", "daily_mean"].map((value) => (
+                <button
+                  key={value}
+                  className={aggregation === value ? "selected" : ""}
+                  onClick={() => setAggregation(value)}
+                  type="button"
+                >
+                  {value === "none" ? "Hourly" : "Daily Mean"}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Columns</legend>
+            <div className="columnGrid">
+              {(exportOptions.columns || []).map((column) => (
+                <label key={column} className="miniCheck">
+                  <input
+                    type="checkbox"
+                    checked={selectedColumns.has(column)}
+                    onChange={() => toggleColumn(column)}
+                  />
+                  <span>{column}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
           <div className="actions">
             <button onClick={runPreview} disabled={loading || selectedSites.size === 0}>
               <FileSearch size={18} />
@@ -263,6 +354,7 @@ export default function App() {
               <span>Stream</span>
               <span>Run</span>
               <span>Sites</span>
+              <span>Gates</span>
               <span>Status</span>
             </div>
             {datasets.map((dataset) => (
@@ -270,8 +362,12 @@ export default function App() {
                 <span>{dataset.stream}</span>
                 <span>{dataset.run_date} {dataset.run_type} {dataset.cycle}</span>
                 <span>{dataset.site_ids.length}</span>
+                <span className="gateStack">
+                  <small className={`dot ${statusTone(dataset.crosswalk_status)}`}>{dataset.crosswalk_status}</small>
+                  <small className={`dot ${statusTone(dataset.units_status)}`}>units {dataset.units_status}</small>
+                </span>
                 <span className={`dot ${dataset.export_available ? "good" : "warn"}`}>
-                  {dataset.export_available ? "cached" : dataset.schema_status}
+                  {dataset.export_available ? "cached" : dataset.tidy_available ? "tidy ready" : dataset.schema_status}
                 </span>
               </div>
             ))}
@@ -285,6 +381,35 @@ export default function App() {
             ))}
           </div>
 
+          <div className="inspection">
+            <h3>Units Evidence</h3>
+            <p className={`schemaStatus ${statusTone(units.status)}`}>
+              {units.status} {units.units ? `- ${units.units}` : ""}
+            </p>
+            {(units.evidence || []).slice(0, 3).map((item) => (
+              <p className="schemaError" key={`${item.source}-${item.citation}`}>
+                {item.source}: {item.citation}
+              </p>
+            ))}
+          </div>
+
+          <div className="inspection">
+            <h3>Site QC</h3>
+            <div className="qcGrid">
+              {sites.map((site) => {
+                const siteQc = (qc.per_site || {})[site.site_id] || {};
+                return (
+                  <div className="qcItem" key={site.site_id}>
+                    <strong>{site.usgs_gage_id}</strong>
+                    <span>{siteQc.row_count || 0} rows</span>
+                    <span>{siteQc.start_time_utc || "missing"} to {siteQc.end_time_utc || "missing"}</span>
+                    <span>missing {siteQc.missing_streamflow_count || 0}, duplicate {siteQc.duplicate_timestamp_count || 0}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="preview">
             <h3>Export Preview</h3>
             {preview ? (
@@ -295,6 +420,7 @@ export default function App() {
                     : preview.reasons.join("; ")}
                 </p>
                 <p>{preview.format?.toUpperCase()}</p>
+                <p>{preview.preprocessing?.aggregation || "none"}; missing {preview.preprocessing?.missing_streamflow || "keep"}</p>
               </>
             ) : (
               <p>No preview requested.</p>

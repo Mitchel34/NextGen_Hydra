@@ -115,3 +115,56 @@ def test_resource_download_cli_approval_id_implies_execute(
     assert calls["approval_id"] == "RESOURCE_APPROVAL"
     assert (tmp_path / "resource_download_summary.json").is_file()
     assert (tmp_path / "resource_download_summary.md").is_file()
+
+
+def test_plan_backfill_cli_writes_dry_run_outputs(repo_root, tmp_path, monkeypatch):
+    def fake_build_backfill_plan(**kwargs):
+        return (
+            [{"record_type": "object", "key": "k"}],
+            [{"object_key": "k"}],
+            {
+                "manifest": {
+                    "unique_object_count": 1,
+                    "unique_size_bytes": 9,
+                    "record_count": 1,
+                    "max_object_size_bytes": 9,
+                },
+                "backfill": {
+                    "status": "planned",
+                    "estimated_tidy_rows": 18,
+                    "object_body_downloads": False,
+                    "requires_approval_id_before_download": True,
+                    "run_dates": ["20260517"],
+                    "streams": ["cfe_nom"],
+                    "vpus": ["05"],
+                },
+            },
+        )
+
+    monkeypatch.setattr("nextgen_hydra.cli.build_backfill_plan", fake_build_backfill_plan)
+
+    code = main(
+        [
+            "--root",
+            str(repo_root),
+            "plan-backfill",
+            "--start-date",
+            "20260517",
+            "--end-date",
+            "20260517",
+            "--manifest-output",
+            str(tmp_path / "backfill_manifest.jsonl"),
+            "--discovery-output",
+            str(tmp_path / "backfill_discovery.jsonl"),
+            "--summary-output",
+            str(tmp_path / "backfill_summary.json"),
+            "--summary-markdown",
+            str(tmp_path / "backfill_summary.md"),
+        ]
+    )
+
+    assert code == 0
+    assert (tmp_path / "backfill_manifest.jsonl").is_file()
+    assert (tmp_path / "backfill_discovery.jsonl").is_file()
+    assert (tmp_path / "backfill_summary.json").is_file()
+    assert (tmp_path / "backfill_summary.md").is_file()

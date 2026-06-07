@@ -8,13 +8,18 @@ from fastapi.responses import FileResponse
 
 from .artifacts import (
     ArtifactError,
+    artifact_catalog,
     create_export,
     export_path,
+    export_options,
     list_datasets,
     load_sites,
     preview_export,
     project_root,
+    public_status,
+    quality_report,
     schema_inspection,
+    streamflow_units_status,
 )
 
 
@@ -37,14 +42,39 @@ def api_sites() -> dict[str, object]:
     return {"sites": load_sites(project_root())}
 
 
+@app.get("/api/status")
+def api_status() -> dict[str, object]:
+    return public_status(project_root())
+
+
 @app.get("/api/datasets")
 def api_datasets() -> dict[str, object]:
     return {"datasets": list_datasets(project_root())}
 
 
+@app.get("/api/catalog")
+def api_catalog() -> dict[str, object]:
+    return artifact_catalog(project_root())
+
+
 @app.get("/api/schema-inspection")
 def api_schema_inspection() -> dict[str, object]:
     return schema_inspection(project_root())
+
+
+@app.get("/api/qc")
+def api_qc() -> dict[str, object]:
+    return quality_report(project_root())
+
+
+@app.get("/api/units")
+def api_units() -> dict[str, object]:
+    return streamflow_units_status(project_root())
+
+
+@app.get("/api/export-options")
+def api_export_options() -> dict[str, object]:
+    return export_options(project_root())
 
 
 @app.post("/api/exports/preview")

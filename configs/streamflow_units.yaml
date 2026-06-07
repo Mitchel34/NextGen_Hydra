@@ -1,0 +1,29 @@
+version: 1
+status: documented
+variable: flow
+units: m3 s-1
+evidence:
+  - source: NOAA-OWP/t-route
+    citation: src/bmi_troute.py maps channel_exit_water_x-section__volume_flow_rate to m3 s-1
+    url: https://github.com/NOAA-OWP/t-route/blob/master/src/bmi_troute.py
+    note: t-route BMI identifies the channel exit volume flow rate as streamflow in m3 s-1.
+  - source: NOAA-OWP/t-route
+    citation: src/troute-nwm/src/nwm_routing/output.py maps streamflow parquet output units to m3/s
+    url: https://github.com/NOAA-OWP/t-route/blob/master/src/troute-nwm/src/nwm_routing/output.py
+    note: t-route's flowveldepth-to-parquet converter maps streamflow to m3/s, equivalent to m3 s-1.
+  - source: approved local datastream metadata
+    citation: datastream_steps.txt runs datastreamcli nc2parquet.py from outputs/troute into outputs/troute
+    path: data/raw/outputs/cfe_nom/v2.2_hydrofabric/ngen.20260523/short_range/00/VPU_05/datastream-metadata/datastream_steps.txt
+    note: Approved local metadata links the downloaded Parquet files to t-route NetCDF output conversion.
+searched_sources:
+  - raw troute Parquet schema metadata
+  - downloaded datastream metadata sidecar files
+  - approved VPU_05 and VPU_06 hydrofabric geopackages
+  - NOAA-OWP/t-route source
+  - NOAA-OWP/NextGen information
+  - NOAA-OWP/ngen routing documentation
+notes: >-
+  Official NOAA-OWP/t-route source maps channel streamflow volume flow rate to
+  m3 s-1 and maps t-route streamflow parquet output to m3/s. The local approved
+  datastream metadata records that the downloaded troute Parquet objects were
+  produced by converting outputs/troute NetCDF files with nc2parquet.py.

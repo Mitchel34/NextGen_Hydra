@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 import sys
 
+from .backfill import (
+    BackfillPlanError,
+    build_backfill_plan,
+    write_backfill_plan_summary,
+)
 from .classifier import classify_records
 from .config import (
     ConfigError,
@@ -64,6 +69,11 @@ from .schema_inspection import (
     write_schema_inspection_report,
 )
 from .tidy import TidyError, tidy_manifest_records
+from .units import (
+    UnitsError,
+    load_streamflow_units,
+    require_documented_flow_units,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         CrosswalkError,
         SchemaInspectionError,
         TidyError,
+        UnitsError,
+        BackfillPlanError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -171,6 +183,35 @@ def build_parser() -> argparse.ArgumentParser:
     validate_manifest.add_argument("--manifest", type=Path, required=True)
     validate_manifest.add_argument("--allow-oversized", action="store_true")
     validate_manifest.set_defaults(func=cmd_validate_manifest)
+
+    backfill = subcommands.add_parser("plan-backfill")
+    backfill.add_argument("--start-date", required=True, help="YYYYMMDD")
+    backfill.add_argument("--end-date", required=True, help="YYYYMMDD")
+    backfill.add_argument("--run-type", default="short_range")
+    backfill.add_argument("--cycle", default="00")
+    backfill.add_argument("--max-days", type=int, default=7)
+    backfill.add_argument("--max-objects-per-prefix", type=int, default=100)
+    backfill.add_argument(
+        "--manifest-output",
+        type=Path,
+        default=Path("manifests/backfill_manifest.jsonl"),
+    )
+    backfill.add_argument(
+        "--discovery-output",
+        type=Path,
+        default=Path("reports/backfill_discovery.jsonl"),
+    )
+    backfill.add_argument(
+        "--summary-output",
+        type=Path,
+        default=Path("reports/backfill_plan_summary.json"),
+    )
+    backfill.add_argument(
+        "--summary-markdown",
+        type=Path,
+        default=Path("reports/backfill_plan_summary.md"),
+    )
+    backfill.set_defaults(func=cmd_plan_backfill)
 
     download = subcommands.add_parser("download")
     download.add_argument("--manifest", type=Path, required=True)
@@ -313,6 +354,11 @@ def build_parser() -> argparse.ArgumentParser:
     tidy.add_argument("--time-column", required=True)
     tidy.add_argument("--flow-column", required=True)
     tidy.add_argument("--flow-units", required=True)
+    tidy.add_argument(
+        "--units-config",
+        type=Path,
+        default=Path("configs/streamflow_units.yaml"),
+    )
     tidy.add_argument("--output-format", choices=["parquet", "csv"], default="parquet")
     tidy.set_defaults(func=cmd_tidy)
 
@@ -487,6 +533,48 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plan_backfill(args: argparse.Namespace) -> int:
+    defaults, sites = _load(args)
+    require_all_sites_mapped(sites)
+    discovery, manifest, summary = build_backfill_plan(
+        defaults=defaults,
+        sites=sites,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        run_type=args.run_type,
+        cycle=args.cycle,
+        max_days=args.max_days,
+        max_objects_per_prefix=args.max_objects_per_prefix,
+        manifest_path=args.manifest_output,
+        discovery_path=args.discovery_output,
+    )
+    write_jsonl(args.discovery_output, discovery)
+    write_jsonl(args.manifest_output, manifest)
+    write_backfill_plan_summary(
+        summary=summary,
+        json_path=args.summary_output,
+        markdown_path=args.summary_markdown,
+    )
+    print(
+        json.dumps(
+            {
+                "status": summary["backfill"]["status"],
+                "object_body_downloads": False,
+                "manifest_output": str(args.manifest_output),
+                "discovery_output": str(args.discovery_output),
+                "summary_output": str(args.summary_output),
+                "summary_markdown": str(args.summary_markdown),
+                "unique_objects": summary["manifest"]["unique_object_count"],
+                "unique_size_bytes": summary["manifest"]["unique_size_bytes"],
+                "estimated_tidy_rows": summary["backfill"]["estimated_tidy_rows"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_download(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
@@ -610,6 +698,7 @@ def cmd_download_resources(args: argparse.Namespace) -> int:
         path=args.summary_output,
         markdown_path=args.summary_markdown,
         manifest_path=args.manifest,
+        defaults=defaults,
         plan_output=args.plan_output,
         provenance_path=provenance,
         approval_id=approval_id if execute else None,
@@ -715,6 +804,12 @@ def cmd_tidy(args: argparse.Namespace) -> int:
     output_dir = args.output_dir or Path(defaults["paths"]["tidy_data_dir"])
     manifest = read_jsonl(args.manifest)
     site_crosswalk = load_site_crosswalk(args.site_crosswalk)
+    units_config = load_streamflow_units(args.units_config)
+    flow_units = require_documented_flow_units(
+        units_config=units_config,
+        flow_column=args.flow_column,
+        requested_units=args.flow_units,
+    )
     catalog = tidy_manifest_records(
         manifest_records=manifest,
         defaults=defaults,
@@ -723,7 +818,8 @@ def cmd_tidy(args: argparse.Namespace) -> int:
         feature_id_column=args.feature_id_column,
         time_column=args.time_column,
         flow_column=args.flow_column,
-        flow_units=args.flow_units,
+        flow_units=flow_units,
+        units_evidence=units_config,
         output_format=args.output_format,
         sites=sites,
         site_crosswalk=site_crosswalk,

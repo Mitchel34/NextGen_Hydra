@@ -61,11 +61,84 @@ def load_sites(root: Path | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+def public_status(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    catalog = artifact_catalog(root)
+    return {
+        "status": catalog["status"],
+        "generated_at_utc": catalog["generated_at_utc"],
+        "site_count": len(catalog["sites"]),
+        "dataset_count": len(catalog["datasets"]),
+        "schema_status": catalog["schema"].get("status"),
+        "units_status": catalog["units"].get("status"),
+        "qc_status": catalog["qc"].get("status"),
+        "tidy_available": any(row.get("tidy_available") for row in catalog["datasets"]),
+        "export_available": any(row.get("export_available") for row in catalog["datasets"]),
+        "forbidden_public_operations": [
+            "discover",
+            "download",
+            "download-resources",
+            "approval-submission",
+            "resolve-site-crosswalk",
+        ],
+    }
+
+
+def artifact_catalog(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    catalog_path = root / "reports/artifact_catalog.json"
+    if catalog_path.is_file():
+        return _read_json(catalog_path)
+    return build_artifact_catalog(root)
+
+
+def build_artifact_catalog(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    datasets = list_datasets(root)
+    sites = _sites_with_qc(load_sites(root), quality_report(root))
+    qc = quality_report(root)
+    units = streamflow_units_status(root)
+    schema = schema_inspection(root)
+    exports = _available_exports(root)
+    status = "ready" if datasets and all(row.get("export_available") for row in datasets) else "incomplete"
+    return {
+        "catalog_version": 1,
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "status": status,
+        "sites": sites,
+        "datasets": datasets,
+        "schema": {
+            "status": schema.get("status", "missing"),
+            "object_count": schema.get("object_count", 0),
+            "errors": schema.get("errors", []),
+        },
+        "units": units,
+        "qc": _qc_summary(qc),
+        "exports": exports,
+    }
+
+
+def write_artifact_catalog(path: Path, root: Path | None = None) -> dict[str, Any]:
+    catalog = build_artifact_catalog(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(catalog, indent=2, sort_keys=True), encoding="utf-8")
+    return catalog
+
+
 def list_datasets(root: Path | None = None) -> list[dict[str, Any]]:
     root = root or project_root()
     manifest = _read_optional_jsonl(root / "manifests/manifest.jsonl")
     catalog = _read_optional_jsonl(root / "data/tidy/catalog.jsonl")
     schema = schema_inspection(root)
+    units = streamflow_units_status(root)
+    crosswalk_ready = all(
+        site.get("crosswalk_status") == "resolved" for site in load_sites(root)
+    )
+    tidy_available = (
+        schema.get("status") == "pass"
+        and crosswalk_ready
+        and units.get("status") == "documented"
+    )
     catalog_by_group = _catalog_groups(catalog, root)
     grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for record in manifest:
@@ -89,6 +162,9 @@ def list_datasets(root: Path | None = None) -> list[dict[str, Any]]:
                 "raw_object_keys": set(),
                 "raw_manifest_records": 0,
                 "schema_status": schema.get("status"),
+                "crosswalk_status": "resolved" if crosswalk_ready else "incomplete",
+                "units_status": units.get("status"),
+                "tidy_available": tidy_available,
                 "export_available": False,
                 "tidy_records": 0,
                 "tidy_rows": 0,
@@ -111,6 +187,9 @@ def list_datasets(root: Path | None = None) -> list[dict[str, Any]]:
                 "raw_object_keys": set(),
                 "raw_manifest_records": 0,
                 "schema_status": schema.get("status"),
+                "crosswalk_status": "resolved" if crosswalk_ready else "incomplete",
+                "units_status": units.get("status"),
+                "tidy_available": tidy_available,
                 "export_available": False,
                 "tidy_records": 0,
                 "tidy_rows": 0,
@@ -132,6 +211,53 @@ def schema_inspection(root: Path | None = None) -> dict[str, Any]:
     return _read_json(path)
 
 
+def streamflow_units_status(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    data = _read_optional_yaml(root / "configs/streamflow_units.yaml")
+    if not data:
+        return {"status": "missing", "variable": "flow", "units": None}
+    return {
+        "status": data.get("status", "missing"),
+        "variable": data.get("variable"),
+        "units": data.get("units"),
+        "evidence_count": len(data.get("evidence") or []),
+        "evidence": data.get("evidence") or [],
+    }
+
+
+def quality_report(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    path = root / "reports/qc_report.json"
+    if not path.is_file():
+        return {"status": "missing", "per_site": {}, "errors": []}
+    data = _read_json(path)
+    return {"status": "available", **data}
+
+
+def export_options(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    datasets = list_datasets(root)
+    catalog = _read_optional_jsonl(root / "data/tidy/catalog.jsonl")
+    available_columns = sorted(_tidy_columns(root, catalog))
+    return {
+        "sites": load_sites(root),
+        "streams": sorted({row["stream"] for row in datasets}),
+        "formats": ["csv", "parquet"],
+        "preprocessing": {
+            "missing_streamflow": ["keep", "drop"],
+            "aggregation": ["none", "daily_mean"],
+        },
+        "columns": available_columns,
+        "defaults": {
+            "format": "csv",
+            "missing_streamflow": "keep",
+            "aggregation": "none",
+            "columns": available_columns,
+        },
+        "time_coverage": _time_coverage(catalog),
+    }
+
+
 def preview_export(payload: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     root = root or project_root()
     preview = _build_preview(payload, root)
@@ -141,6 +267,8 @@ def preview_export(payload: dict[str, Any], root: Path | None = None) -> dict[st
         "row_count": preview.row_count,
         "record_count": len(preview.records),
         "format": preview.export_format,
+        "preprocessing": _preprocessing_options(payload),
+        "columns": _requested_columns(payload),
         "files": [record["tidy_path"] for record in preview.records],
     }
 
@@ -162,6 +290,7 @@ def create_export(payload: dict[str, Any], root: Path | None = None) -> dict[str
         "format": preview.export_format,
         "path": str(output),
         "row_count": _export_row_count(output, preview.export_format),
+        "metadata_path": str(_write_export_metadata(output, payload, preview)),
     }
 
 
@@ -186,6 +315,24 @@ def _build_preview(payload: dict[str, Any], root: Path) -> ExportPreview:
         return ExportPreview(False, ["no approved tidy catalog is available"], [], 0, export_format)
     site_ids = {str(value) for value in payload.get("site_ids", []) if value}
     streams = {str(value) for value in payload.get("streams", []) if value}
+    preprocessing = _preprocessing_options(payload)
+    columns = _requested_columns(payload)
+    if preprocessing["missing_streamflow"] not in {"keep", "drop"}:
+        return ExportPreview(False, ["unsupported missing streamflow option"], [], 0, export_format)
+    if preprocessing["aggregation"] not in {"none", "daily_mean"}:
+        return ExportPreview(False, ["unsupported aggregation option"], [], 0, export_format)
+    start = payload.get("start_time_utc")
+    end = payload.get("end_time_utc")
+    if start and end and str(start) > str(end):
+        return ExportPreview(False, ["start_time_utc must be before end_time_utc"], [], 0, export_format)
+    if columns:
+        available_columns = _tidy_columns(root, catalog)
+        if preprocessing["aggregation"] == "daily_mean":
+            available_columns = set(available_columns)
+            available_columns.add("streamflow_daily_mean")
+        invalid = sorted(set(columns) - available_columns)
+        if invalid:
+            return ExportPreview(False, [f"unsupported columns: {invalid}"], [], 0, export_format)
     records = []
     reasons: list[str] = []
     for record in catalog:
@@ -225,7 +372,7 @@ def _write_export(
             frame = pd.read_csv(path)
         else:
             raise ArtifactError(f"unsupported tidy file format: {path}")
-        frames.append(_filter_time_range(frame, payload))
+        frames.append(_apply_preprocessing(frame, payload))
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if export_format == "parquet":
         combined.to_parquet(output, index=False)
@@ -249,6 +396,61 @@ def _filter_time_range(frame: Any, payload: dict[str, Any]) -> Any:
     if end:
         mask &= times <= pd.to_datetime(end, utc=True)
     return frame[mask]
+
+
+def _apply_preprocessing(frame: Any, payload: dict[str, Any]) -> Any:
+    frame = _filter_time_range(frame, payload)
+    preprocessing = _preprocessing_options(payload)
+    if preprocessing["missing_streamflow"] == "drop" and "streamflow" in frame.columns:
+        frame = frame[frame["streamflow"].notna()]
+    if preprocessing["aggregation"] == "daily_mean":
+        frame = _daily_mean(frame)
+    columns = _requested_columns(payload)
+    if columns:
+        if preprocessing["aggregation"] == "daily_mean":
+            columns = [
+                "streamflow_daily_mean" if column == "streamflow" else column
+                for column in columns
+            ]
+        frame = frame[[column for column in columns if column in frame.columns]]
+    return frame
+
+
+def _daily_mean(frame: Any) -> Any:
+    if "time_utc" not in frame.columns or "streamflow" not in frame.columns:
+        return frame
+    try:
+        import pandas as pd  # type: ignore
+    except ImportError:  # pragma: no cover
+        return frame
+    grouped = frame.copy()
+    grouped["time_utc"] = pd.to_datetime(grouped["time_utc"], errors="coerce", utc=True)
+    grouped = grouped[grouped["time_utc"].notna()]
+    if grouped.empty:
+        return grouped
+    grouped["date_utc"] = grouped["time_utc"].dt.strftime("%Y-%m-%d")
+    keys = [
+        column
+        for column in (
+            "site_id",
+            "usgs_gage_id",
+            "hydrofabric_feature_id",
+            "troute_feature_id",
+            "vpu_id",
+            "stream",
+            "run_date",
+            "run_type",
+            "cycle",
+            "streamflow_units",
+        )
+        if column in grouped.columns
+    ]
+    aggregated = (
+        grouped.groupby([*keys, "date_utc"], dropna=False, as_index=False)["streamflow"]
+        .mean()
+        .rename(columns={"streamflow": "streamflow_daily_mean"})
+    )
+    return aggregated
 
 
 def _export_row_count(path: Path, export_format: str) -> int:
@@ -301,6 +503,9 @@ def _serialise_dataset(group: dict[str, Any]) -> dict[str, Any]:
         "raw_object_count": len(group["raw_object_keys"]),
         "raw_manifest_records": group["raw_manifest_records"],
         "schema_status": group["schema_status"],
+        "crosswalk_status": group["crosswalk_status"],
+        "units_status": group["units_status"],
+        "tidy_available": group["tidy_available"],
         "export_available": group["export_available"],
         "tidy_records": group["tidy_records"],
         "tidy_rows": group["tidy_rows"],
@@ -312,6 +517,116 @@ def _export_id(payload: dict[str, Any]) -> str:
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return f"export_{digest[:16]}"
+
+
+def _preprocessing_options(payload: dict[str, Any]) -> dict[str, str]:
+    preprocessing = payload.get("preprocessing")
+    if not isinstance(preprocessing, dict):
+        preprocessing = {}
+    return {
+        "missing_streamflow": str(preprocessing.get("missing_streamflow") or "keep"),
+        "aggregation": str(preprocessing.get("aggregation") or "none"),
+    }
+
+
+def _requested_columns(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("columns")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ArtifactError("columns must be a list")
+    return [str(column) for column in raw if column]
+
+
+def _write_export_metadata(
+    output: Path,
+    payload: dict[str, Any],
+    preview: ExportPreview,
+) -> Path:
+    metadata_path = output.with_suffix(output.suffix + ".metadata.json")
+    metadata = {
+        "metadata_version": 1,
+        "created_at_utc": datetime.now(UTC).isoformat(),
+        "export_id": output.stem,
+        "export_path": str(output),
+        "format": preview.export_format,
+        "row_count": _export_row_count(output, preview.export_format),
+        "record_count": len(preview.records),
+        "payload": payload,
+        "preprocessing": _preprocessing_options(payload),
+        "columns": _requested_columns(payload),
+        "source_tidy_files": [record["tidy_path"] for record in preview.records],
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    return metadata_path
+
+
+def _tidy_columns(root: Path, catalog: list[dict[str, Any]]) -> set[str]:
+    for record in catalog:
+        tidy_path = _safe_project_path(root, str(record.get("tidy_path") or ""))
+        if not tidy_path.is_file():
+            continue
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError:  # pragma: no cover
+            return set()
+        if tidy_path.suffix == ".parquet":
+            return set(pd.read_parquet(tidy_path, columns=None).columns)
+        if tidy_path.suffix == ".csv":
+            return set(pd.read_csv(tidy_path, nrows=0).columns)
+    return set()
+
+
+def _time_coverage(catalog: list[dict[str, Any]]) -> dict[str, str | None]:
+    starts = [str(record["start_time_utc"]) for record in catalog if record.get("start_time_utc")]
+    ends = [str(record["end_time_utc"]) for record in catalog if record.get("end_time_utc")]
+    return {
+        "start_time_utc": min(starts) if starts else None,
+        "end_time_utc": max(ends) if ends else None,
+    }
+
+
+def _sites_with_qc(sites: list[dict[str, Any]], qc: dict[str, Any]) -> list[dict[str, Any]]:
+    per_site = qc.get("per_site") or {}
+    return [
+        {
+            **site,
+            "qc": per_site.get(site["site_id"], {}),
+        }
+        for site in sites
+    ]
+
+
+def _qc_summary(qc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": qc.get("status", "missing"),
+        "approval_id": qc.get("approval_id"),
+        "per_site": qc.get("per_site", {}),
+        "tidy_catalog": qc.get("tidy_catalog", {}),
+        "inventory": qc.get("inventory", {}),
+    }
+
+
+def _available_exports(root: Path) -> list[dict[str, Any]]:
+    export_dir = root / "data/exports"
+    if not export_dir.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(export_dir.glob("export_*.*")):
+        if path.name.endswith(".metadata.json"):
+            continue
+        metadata_path = path.with_suffix(path.suffix + ".metadata.json")
+        metadata = _read_json(metadata_path) if metadata_path.is_file() else {}
+        rows.append(
+            {
+                "id": path.stem,
+                "format": path.suffix.lstrip("."),
+                "path": str(path),
+                "size_bytes": path.stat().st_size,
+                "metadata": metadata,
+            }
+        )
+    return rows
 
 
 def _safe_project_path(root: Path, raw_path: str) -> Path:

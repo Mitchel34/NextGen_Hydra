@@ -4,6 +4,7 @@ import pytest
 
 from nextgen_hydra.qc import build_qc_report
 from nextgen_hydra.tidy import TidyError, build_catalog_record, normalise_rows, tidy_manifest_records
+from nextgen_hydra.units import UnitsError, require_documented_flow_units
 from nextgen_hydra.manifest import build_manifest_records
 from tests.test_manifest import mapped_site
 
@@ -235,3 +236,70 @@ def test_tidy_requires_per_site_feature_coverage(defaults, approved_object, tmp_
             output_format="csv",
             sites=[site],
         )
+
+
+def test_tidy_refuses_undocumented_units_evidence(defaults, approved_object, tmp_path, monkeypatch):
+    site = mapped_site()
+    manifest = build_manifest_records([approved_object], [site], defaults)
+    raw_path = tmp_path / "raw" / approved_object["key"]
+    raw_path.parent.mkdir(parents=True)
+    raw_path.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(
+        "nextgen_hydra.tidy._read_source_rows",
+        lambda *_args: [
+            {
+                "feature_id": site.hydrofabric_feature_id,
+                "time": "2026-05-22T01:00:00Z",
+                "streamflow": 1.0,
+            }
+        ],
+    )
+
+    with pytest.raises(TidyError, match="documented streamflow units"):
+        tidy_manifest_records(
+            manifest_records=manifest,
+            defaults=defaults,
+            raw_dir=tmp_path / "raw",
+            output_dir=tmp_path / "tidy",
+            feature_id_column="feature_id",
+            time_column="time",
+            flow_column="streamflow",
+            flow_units="m3 s-1",
+            units_evidence={
+                "version": 1,
+                "status": "unresolved",
+                "variable": "streamflow",
+                "units": None,
+                "evidence": [],
+            },
+            output_format="csv",
+            sites=[site],
+        )
+
+
+def test_units_gate_requires_authoritative_evidence():
+    with pytest.raises(UnitsError, match="not documented"):
+        require_documented_flow_units(
+            units_config={
+                "version": 1,
+                "status": "unresolved",
+                "variable": "flow",
+                "units": None,
+                "evidence": [],
+            },
+            flow_column="flow",
+            requested_units="m3 s-1",
+        )
+
+    units = require_documented_flow_units(
+        units_config={
+            "version": 1,
+            "status": "documented",
+            "variable": "flow",
+            "units": "m3 s-1",
+            "evidence": [{"source": "fixture", "citation": "fixture docs"}],
+        },
+        flow_column="flow",
+        requested_units="m3 s-1",
+    )
+    assert units == "m3 s-1"

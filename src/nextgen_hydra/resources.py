@@ -8,7 +8,11 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import Site, proof_download_max_total_bytes
+from .config import (
+    Site,
+    resource_download_max_object_bytes,
+    resource_download_max_total_bytes,
+)
 from .download import (
     DownloadSafetyError,
     _download_one,
@@ -119,7 +123,8 @@ def build_resource_manifest_summary(
         "resource_type_counts": dict(Counter(row["resource_type"] for row in rows)),
         "vpus": sorted({str(row["vpu_id"]) for row in rows}),
         "safety_thresholds": {
-            "max_total_bytes": proof_download_max_total_bytes(defaults),
+            "max_object_bytes": resource_download_max_object_bytes(defaults),
+            "max_total_bytes": resource_download_max_total_bytes(defaults),
         },
     }
 
@@ -196,6 +201,7 @@ def validate_resource_manifest_records(
         size = _coerce_size(row.get("size_bytes"), index, errors)
         if size is not None and size < 0:
             errors.append(f"row {index}: size_bytes is negative")
+    _validate_expected_resource_set(rows, defaults, errors)
     if errors:
         raise ResourceError("resource manifest validation failed:\n" + "\n".join(errors))
     if not rows:
@@ -264,7 +270,17 @@ def download_resource_manifest_file(
     total_download_bytes = sum(
         row["size_bytes"] for row in plan if row["action"] in {"download", "replace"}
     )
-    max_total = proof_download_max_total_bytes(defaults)
+    max_total = resource_download_max_total_bytes(defaults)
+    max_object = resource_download_max_object_bytes(defaults)
+    oversized = [
+        row for row in plan if int(row["size_bytes"]) > max_object
+    ]
+    if oversized and not approval_id:
+        raise DownloadSafetyError(
+            "planned resource object exceeds active threshold "
+            f"{max_object} bytes; approval is required: "
+            + ", ".join(str(row["object_key"]) for row in oversized)
+        )
     if total_download_bytes > max_total and not approval_id:
         raise DownloadSafetyError(
             f"planned resource total {total_download_bytes} exceeds active threshold "
@@ -340,6 +356,7 @@ def write_resource_download_summary(
     path: Path,
     markdown_path: Path | None,
     manifest_path: Path,
+    defaults: dict[str, Any],
     plan_output: Path | None,
     provenance_path: Path | None,
     approval_id: str | None,
@@ -358,6 +375,10 @@ def write_resource_download_summary(
         "provenance": None if provenance_path is None else str(provenance_path),
         "actions": dict(Counter(row["action"] for row in plan)),
         "executed_bytes": sum(int(row.get("executed_size_bytes") or 0) for row in plan),
+        "safety_thresholds": {
+            "max_object_bytes": resource_download_max_object_bytes(defaults),
+            "max_total_bytes": resource_download_max_total_bytes(defaults),
+        },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -380,6 +401,8 @@ def render_resource_download_summary_markdown(summary: dict[str, Any]) -> str:
             f"- Planned bytes: {summary['planned_unique_bytes']}",
             f"- Executed bytes: {summary['executed_bytes']}",
             f"- Actions: `{summary['actions']}`",
+            f"- Max object threshold bytes: {summary['safety_thresholds']['max_object_bytes']}",
+            f"- Max total threshold bytes: {summary['safety_thresholds']['max_total_bytes']}",
             "",
         ]
     )
@@ -400,6 +423,37 @@ def _read_resource_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ResourceError(f"{path}:{line_number}: JSONL row must be an object")
             rows.append(row)
     return rows
+
+
+def _validate_expected_resource_set(
+    rows: list[dict[str, Any]],
+    defaults: dict[str, Any],
+    errors: list[str],
+) -> None:
+    config = defaults["resource_download"]
+    expected_keys = sorted(str(key) for key in config.get("expected_keys", []))
+    actual_keys = sorted(str(row.get("object_key")) for row in rows)
+    if expected_keys and actual_keys != expected_keys:
+        errors.append(
+            "resource manifest keys do not match approved set; "
+            f"expected {expected_keys}, found {actual_keys}"
+        )
+    expected_count = int(config["expected_object_count"])
+    if len(rows) != expected_count:
+        errors.append(
+            f"resource manifest object count {len(rows)} does not match "
+            f"expected {expected_count}"
+        )
+    try:
+        actual_total = sum(int(row.get("size_bytes")) for row in rows)
+    except (TypeError, ValueError):
+        return
+    expected_total = int(config["expected_total_bytes"])
+    if actual_total != expected_total:
+        errors.append(
+            f"resource manifest total bytes {actual_total} does not match "
+            f"expected {expected_total}"
+        )
 
 
 def _log_resource_event(

@@ -72,6 +72,7 @@ def tidy_manifest_records(
     time_column: str,
     flow_column: str,
     flow_units: str,
+    units_evidence: dict[str, Any] | None = None,
     output_format: str = "parquet",
     sites: list[Site] | None = None,
     site_crosswalk: dict[str, Any] | None = None,
@@ -79,6 +80,12 @@ def tidy_manifest_records(
 ) -> list[dict[str, Any]]:
     """Transform validated approved raw records using explicit schema arguments."""
 
+    if units_evidence is not None:
+        _require_tidy_units_evidence(
+            units_evidence=units_evidence,
+            flow_column=flow_column,
+            flow_units=flow_units,
+        )
     validated = validate_manifest_records(manifest_records, defaults, sites=sites)
     data_records = _tidy_data_records(validated)
     if require_crosswalk:
@@ -126,6 +133,29 @@ def tidy_manifest_records(
         )
     _require_per_site_coverage(catalog, data_records)
     return catalog
+
+
+def _require_tidy_units_evidence(
+    *,
+    units_evidence: dict[str, Any],
+    flow_column: str,
+    flow_units: str,
+) -> None:
+    status = str(units_evidence.get("status") or "missing")
+    variable = str(units_evidence.get("variable") or "")
+    units = str(units_evidence.get("units") or "")
+    evidence = units_evidence.get("evidence")
+    errors: list[str] = []
+    if status != "documented":
+        errors.append(f"status is {status!r}")
+    if variable != flow_column:
+        errors.append(f"variable is {variable!r}, expected {flow_column!r}")
+    if units != flow_units:
+        errors.append(f"units are {units!r}, expected {flow_units!r}")
+    if not isinstance(evidence, list) or not evidence:
+        errors.append("authoritative evidence is missing")
+    if errors:
+        raise TidyError("tidy requires documented streamflow units:\n" + "\n".join(errors))
 
 
 def build_catalog_record(
