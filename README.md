@@ -249,6 +249,15 @@ that can run discovery, resource download, NRDS download, approval submission, o
 crosswalk resolution. The file contracts are documented in
 `docs/public_api_file_contracts.md`.
 
+The portal also exposes a governed acquisition intake. Users can search the
+local site directory by COMID, USGS gage, site name, site ID, troute feature ID,
+or VPU; select requested sources (`nextgen`, `nwm`, `era5`, `usgs`); and submit
+an acquisition request. Public acquisition requests are queued under
+`data/requests/` for admin review and never execute discovery or downloads. A
+large all-site directory can be materialized later as
+`data/catalog/site_directory.jsonl`; until then the API falls back to the
+configured project sites.
+
 Run the API:
 
 ```bash

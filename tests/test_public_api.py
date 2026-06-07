@@ -81,6 +81,46 @@ def test_public_status_qc_units_and_options_routes(tmp_path, monkeypatch):
     assert client.get("/api/catalog").status_code == 200
 
 
+def test_site_directory_search_and_acquisition_request_are_non_executing(tmp_path):
+    from apps.api.artifacts import create_acquisition_request, site_directory
+
+    _write_public_fixture(tmp_path, documented_units=True)
+
+    directory = site_directory(tmp_path, query="00000000", source="usgs")
+    request = create_acquisition_request(
+        {
+            "site_ids": ["s"],
+            "comids": [1],
+            "usgs_gage_ids": ["00000000"],
+            "sources": ["nextgen", "usgs"],
+            "streams": ["cfe_nom"],
+            "formats": ["csv"],
+            "start_time_utc": "2026-05-24T00:00:00Z",
+            "end_time_utc": "2026-05-25T00:00:00Z",
+        },
+        tmp_path,
+    )
+
+    assert directory["count"] == 1
+    assert directory["sites"][0]["availability"]["usgs"] is True
+    assert request["status"] == "queued_for_admin_review"
+    assert request["object_body_downloads"] is False
+    assert request["public_execution"] is False
+    assert (tmp_path / "data/requests/acquisition_requests.jsonl").is_file()
+
+
+def test_acquisition_request_rejects_unsupported_sources(tmp_path):
+    from apps.api.artifacts import ArtifactError, create_acquisition_request
+
+    _write_public_fixture(tmp_path)
+
+    with pytest.raises(ArtifactError, match="unsupported acquisition sources"):
+        create_acquisition_request(
+            {"comids": [1], "sources": ["nextgen", "forbidden"]},
+            tmp_path,
+        )
+
+
 def test_public_api_has_no_download_execution_routes(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
@@ -92,6 +132,13 @@ def test_public_api_has_no_download_execution_routes(tmp_path, monkeypatch):
     client = TestClient(app)
 
     assert client.get("/api/sites").status_code == 200
+    assert client.get("/api/site-directory").status_code == 200
+    response = client.post(
+        "/api/acquisition-requests",
+        json={"comids": [1], "sources": ["nextgen"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["object_body_downloads"] is False
     assert client.get("/api/datasets").status_code == 200
     assert client.post("/api/exports", json={"site_ids": ["s"], "format": "csv"}).status_code == 409
     route_paths = {route.path for route in app.routes}

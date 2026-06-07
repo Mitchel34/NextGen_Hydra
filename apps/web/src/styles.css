@@ -237,6 +237,100 @@ legend {
   padding: 9px;
 }
 
+.searchRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.searchRow input,
+.manualGrid input {
+  min-width: 0;
+  border: 1px solid #cbd4d0;
+  border-radius: 6px;
+  padding: 9px;
+}
+
+.searchRow button,
+.requestButton {
+  min-height: 40px;
+  border: 1px solid #cbd4d0;
+  background: #ffffff;
+  color: #17212b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 6px;
+}
+
+.sourceGrid,
+.manualGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.manualGrid label {
+  display: grid;
+  gap: 6px;
+  color: #56616c;
+  font-weight: 700;
+}
+
+.compact {
+  margin-bottom: 8px;
+}
+
+.directoryList {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+  margin-bottom: 8px;
+}
+
+.directoryItem {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid #e2e7e4;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 9px 10px;
+  color: #26313d;
+}
+
+.directoryItem.selected {
+  border-color: #28666e;
+  background: #eef7f5;
+}
+
+.directoryItem strong {
+  display: block;
+  font-size: 13px;
+}
+
+.directoryItem small,
+.requestStatus {
+  color: #5a6470;
+  font-size: 13px;
+}
+
+.requestButton {
+  width: 100%;
+  background: #24535d;
+  color: #ffffff;
+  border-color: #24535d;
+}
+
+.requestStatus {
+  margin-top: 8px;
+  word-break: break-word;
+}
+
 .columnGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

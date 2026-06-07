@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -28,6 +29,9 @@ class ExportPreview:
     records: list[dict[str, Any]]
     row_count: int
     export_format: str
+
+
+SOURCE_KEYS = {"nextgen", "nwm", "era5", "usgs"}
 
 
 def project_root() -> Path:
@@ -61,6 +65,86 @@ def load_sites(root: Path | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+def site_directory(
+    root: Path | None = None,
+    *,
+    query: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Search local site directory records.
+
+    The directory is a local catalog contract, not a live remote search. Large
+    external inventories can be materialized to data/catalog/site_directory.jsonl
+    by an admin workflow later; until then the configured sites are the fallback.
+    """
+    root = root or project_root()
+    rows = _site_directory_records(root)
+    source_key = str(source or "").lower().strip()
+    if source_key and source_key not in SOURCE_KEYS:
+        raise ArtifactError(f"unsupported source: {source}")
+    needle = str(query or "").lower().strip()
+    if source_key:
+        rows = [
+            row for row in rows if bool((row.get("availability") or {}).get(source_key))
+        ]
+    if needle:
+        rows = [row for row in rows if _directory_match(row, needle)]
+    limit = max(1, min(int(limit or 50), 250))
+    return {
+        "status": "available",
+        "directory_source": _site_directory_source(root),
+        "query": query,
+        "source": source_key or None,
+        "limit": limit,
+        "count": len(rows[:limit]),
+        "sites": rows[:limit],
+        "supported_sources": sorted(SOURCE_KEYS),
+    }
+
+
+def site_directory_detail(identifier: str, root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    needle = str(identifier).lower().strip()
+    for row in _site_directory_records(root):
+        if _directory_identifier_match(row, needle):
+            return row
+    raise ArtifactError(f"site directory entry is not available: {identifier}")
+
+
+def create_acquisition_request(
+    payload: dict[str, Any],
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Create a public acquisition request without executing acquisition work."""
+    root = root or project_root()
+    request = _normalise_acquisition_request(payload, root)
+    request_id = _acquisition_request_id(request)
+    created_at = datetime.now(UTC).isoformat()
+    record = {
+        "id": request_id,
+        "created_at_utc": created_at,
+        "status": "queued_for_admin_review",
+        "request": request,
+        "public_execution": False,
+        "object_body_downloads": False,
+        "requires_admin_cli": True,
+        "next_admin_steps": [
+            "validate requested identifiers against approved source directories",
+            "resolve NextGen COMIDs to VPUs and troute feature IDs when applicable",
+            "build classifier-gated manifest or source-specific dry-run plan",
+            "require explicit approval ID before any object-body download",
+        ],
+    }
+    request_dir = root / "data/requests"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    request_path = request_dir / f"{request_id}.json"
+    request_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    with (request_dir / "acquisition_requests.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    return {**record, "path": str(request_path)}
+
+
 def public_status(root: Path | None = None) -> dict[str, Any]:
     root = root or project_root()
     catalog = artifact_catalog(root)
@@ -81,6 +165,7 @@ def public_status(root: Path | None = None) -> dict[str, Any]:
             "approval-submission",
             "resolve-site-crosswalk",
         ],
+        "public_acquisition_requests": True,
     }
 
 
@@ -627,6 +712,201 @@ def _available_exports(root: Path) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _site_directory_source(root: Path) -> str:
+    if (root / "data/catalog/site_directory.jsonl").is_file():
+        return "data/catalog/site_directory.jsonl"
+    return "configs/sites.yaml"
+
+
+def _site_directory_records(root: Path) -> list[dict[str, Any]]:
+    path = root / "data/catalog/site_directory.jsonl"
+    if path.is_file():
+        return [_normalise_directory_row(row) for row in _read_optional_jsonl(path)]
+    rows = []
+    for site in load_sites(root):
+        rows.append(
+            {
+                "site_id": site["site_id"],
+                "name": site["name"],
+                "comid": site["hydrofabric_feature_id"],
+                "hydrofabric_feature_id": site["hydrofabric_feature_id"],
+                "troute_feature_id": site.get("troute_feature_id"),
+                "usgs_gage_id": site["usgs_gage_id"],
+                "vpu_id": site["vpu_id"],
+                "availability": {
+                    "nextgen": site.get("crosswalk_status") == "resolved",
+                    "nwm": True,
+                    "era5": False,
+                    "usgs": bool(site.get("usgs_gage_id")),
+                },
+                "status": "configured",
+                "source": "configs/sites.yaml",
+            }
+        )
+    return rows
+
+
+def _normalise_directory_row(row: dict[str, Any]) -> dict[str, Any]:
+    availability = row.get("availability")
+    if not isinstance(availability, dict):
+        availability = row.get("sources") if isinstance(row.get("sources"), dict) else {}
+    return {
+        "site_id": str(row.get("site_id") or row.get("id") or ""),
+        "name": str(row.get("name") or row.get("description") or ""),
+        "comid": _optional_int(row.get("comid") or row.get("hydrofabric_feature_id")),
+        "hydrofabric_feature_id": _optional_int(row.get("hydrofabric_feature_id") or row.get("comid")),
+        "troute_feature_id": _optional_int(row.get("troute_feature_id")),
+        "usgs_gage_id": None if row.get("usgs_gage_id") in (None, "") else str(row.get("usgs_gage_id")),
+        "vpu_id": None if row.get("vpu_id") in (None, "") else str(row.get("vpu_id")),
+        "availability": {key: bool(availability.get(key)) for key in SOURCE_KEYS},
+        "status": str(row.get("status") or "available"),
+        "source": str(row.get("source") or "data/catalog/site_directory.jsonl"),
+    }
+
+
+def _directory_match(row: dict[str, Any], needle: str) -> bool:
+    haystack = " ".join(
+        str(value)
+        for value in (
+            row.get("site_id"),
+            row.get("name"),
+            row.get("comid"),
+            row.get("hydrofabric_feature_id"),
+            row.get("troute_feature_id"),
+            row.get("usgs_gage_id"),
+            row.get("vpu_id"),
+        )
+        if value not in (None, "")
+    ).lower()
+    return needle in haystack
+
+
+def _directory_identifier_match(row: dict[str, Any], needle: str) -> bool:
+    return needle in {
+        str(value).lower()
+        for value in (
+            row.get("site_id"),
+            row.get("comid"),
+            row.get("hydrofabric_feature_id"),
+            row.get("troute_feature_id"),
+            row.get("usgs_gage_id"),
+        )
+        if value not in (None, "")
+    }
+
+
+def _normalise_acquisition_request(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    sources = _string_list(payload.get("sources"))
+    if not sources:
+        sources = ["nextgen"]
+    invalid_sources = sorted(set(sources) - SOURCE_KEYS)
+    if invalid_sources:
+        raise ArtifactError(f"unsupported acquisition sources: {invalid_sources}")
+    streams = _string_list(payload.get("streams")) or ["cfe_nom", "lstm_0"]
+    formats = _string_list(payload.get("formats")) or ["parquet"]
+    invalid_formats = sorted(set(formats) - {"csv", "parquet"})
+    if invalid_formats:
+        raise ArtifactError(f"unsupported requested formats: {invalid_formats}")
+    site_ids = _string_list(payload.get("site_ids"))
+    comids = [_coerce_identifier(value, "COMID") for value in _raw_list(payload.get("comids"))]
+    usgs_gage_ids = [_coerce_usgs_gage(value) for value in _raw_list(payload.get("usgs_gage_ids"))]
+    freeform_query = str(payload.get("query") or "").strip()
+    matched_sites = _matched_directory_sites(root, site_ids, comids, usgs_gage_ids, freeform_query)
+    if not matched_sites and not (comids or usgs_gage_ids or freeform_query):
+        raise ArtifactError("request must include site_ids, comids, usgs_gage_ids, or query")
+    start = _optional_string(payload.get("start_time_utc"))
+    end = _optional_string(payload.get("end_time_utc"))
+    if start and end and start > end:
+        raise ArtifactError("start_time_utc must be before end_time_utc")
+    return {
+        "site_ids": site_ids,
+        "comids": comids,
+        "usgs_gage_ids": usgs_gage_ids,
+        "query": freeform_query or None,
+        "sources": sources,
+        "streams": streams,
+        "start_time_utc": start,
+        "end_time_utc": end,
+        "formats": formats,
+        "preprocessing": _preprocessing_options(payload),
+        "matched_directory_sites": matched_sites,
+        "notes": _optional_string(payload.get("notes")),
+    }
+
+
+def _matched_directory_sites(
+    root: Path,
+    site_ids: list[str],
+    comids: list[int],
+    usgs_gage_ids: list[str],
+    query: str,
+) -> list[dict[str, Any]]:
+    rows = _site_directory_records(root)
+    needles = {value.lower() for value in site_ids}
+    needles.update(str(value) for value in comids)
+    needles.update(value.lower() for value in usgs_gage_ids)
+    if query:
+        q = query.lower()
+        return [row for row in rows if _directory_match(row, q)]
+    return [
+        row
+        for row in rows
+        if any(_directory_identifier_match(row, needle) for needle in needles)
+    ]
+
+
+def _acquisition_request_id(request: dict[str, Any]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"acq_{digest[:16]}"
+
+
+def _string_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ArtifactError("list-valued request fields must be lists")
+    return [str(value).strip() for value in raw if str(value).strip()]
+
+
+def _raw_list(raw: Any) -> list[Any]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ArtifactError("list-valued request fields must be lists")
+    return raw
+
+
+def _optional_string(raw: Any) -> str | None:
+    if raw in (None, ""):
+        return None
+    return str(raw).strip() or None
+
+
+def _coerce_identifier(raw: Any, label: str) -> int:
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ArtifactError(f"{label} must be numeric: {raw}") from exc
+
+
+def _coerce_usgs_gage(raw: Any) -> str:
+    value = str(raw).strip()
+    if not re.fullmatch(r"\d{7,15}", value):
+        raise ArtifactError(f"USGS gage ID must be numeric: {raw}")
+    return value
+
+
+def _optional_int(raw: Any) -> int | None:
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_project_path(root: Path, raw_path: str) -> Path:

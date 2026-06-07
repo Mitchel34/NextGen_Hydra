@@ -17,6 +17,8 @@ data/inventory/
 data/provenance/
 data/cache/
 data/exports/
+data/catalog/
+data/requests/
 manifests/*.jsonl
 reports/*.json
 reports/*.jsonl

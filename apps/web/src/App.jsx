@@ -7,6 +7,8 @@ import {
   FileSearch,
   Filter,
   RefreshCw,
+  Search,
+  Send,
   ShieldCheck
 } from "lucide-react";
 
@@ -35,6 +37,13 @@ export default function App() {
   const [units, setUnits] = useState({ status: "loading", evidence: [] });
   const [exportOptions, setExportOptions] = useState({ columns: [], preprocessing: {} });
   const [schema, setSchema] = useState({ status: "loading", errors: [] });
+  const [directory, setDirectory] = useState({ sites: [], supported_sources: [] });
+  const [siteQuery, setSiteQuery] = useState("");
+  const [directorySource, setDirectorySource] = useState("");
+  const [selectedDirectoryIds, setSelectedDirectoryIds] = useState(new Set());
+  const [requestSources, setRequestSources] = useState(new Set(["nextgen"]));
+  const [requestedComids, setRequestedComids] = useState("");
+  const [requestedGages, setRequestedGages] = useState("");
   const [selectedSites, setSelectedSites] = useState(new Set());
   const [selectedStreams, setSelectedStreams] = useState(new Set());
   const [selectedColumns, setSelectedColumns] = useState(new Set());
@@ -45,6 +54,7 @@ export default function App() {
   const [aggregation, setAggregation] = useState("none");
   const [preview, setPreview] = useState(null);
   const [exportResult, setExportResult] = useState(null);
+  const [acquisitionResult, setAcquisitionResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -63,14 +73,15 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [statusData, siteData, datasetData, schemaData, qcData, unitsData, optionsData] = await Promise.all([
+      const [statusData, siteData, datasetData, schemaData, qcData, unitsData, optionsData, directoryData] = await Promise.all([
         fetchJson("/api/status"),
         fetchJson("/api/sites"),
         fetchJson("/api/datasets"),
         fetchJson("/api/schema-inspection"),
         fetchJson("/api/qc"),
         fetchJson("/api/units"),
-        fetchJson("/api/export-options")
+        fetchJson("/api/export-options"),
+        fetchJson("/api/site-directory?limit=10")
       ]);
       setStatus(statusData || { status: "missing" });
       setSites(siteData.sites || []);
@@ -79,6 +90,7 @@ export default function App() {
       setQc(qcData || { status: "missing", per_site: {} });
       setUnits(unitsData || { status: "missing", evidence: [] });
       setExportOptions(optionsData || { columns: [], preprocessing: {} });
+      setDirectory(directoryData || { sites: [], supported_sources: [] });
       setSelectedSites(new Set((siteData.sites || []).map((site) => site.site_id)));
       setSelectedStreams(new Set((datasetData.datasets || []).map((dataset) => dataset.stream)));
       setSelectedColumns(new Set((optionsData.columns || [])));
@@ -113,6 +125,22 @@ export default function App() {
     });
   }
 
+  function toggleDirectorySite(siteId) {
+    setSelectedDirectoryIds((current) => {
+      const next = new Set(current);
+      next.has(siteId) ? next.delete(siteId) : next.add(siteId);
+      return next;
+    });
+  }
+
+  function toggleRequestSource(source) {
+    setRequestSources((current) => {
+      const next = new Set(current);
+      next.has(source) ? next.delete(source) : next.add(source);
+      return next;
+    });
+  }
+
   function payload() {
     return {
       site_ids: Array.from(selectedSites),
@@ -138,6 +166,55 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload())
+        })
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchDirectory() {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ limit: "25" });
+      if (siteQuery) params.set("query", siteQuery);
+      if (directorySource) params.set("source", directorySource);
+      setDirectory(await fetchJson(`/api/site-directory?${params.toString()}`));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function requestAcquisition() {
+    setLoading(true);
+    setError("");
+    setAcquisitionResult(null);
+    try {
+      const payload = {
+        query: siteQuery || null,
+        site_ids: Array.from(selectedDirectoryIds),
+        comids: splitIdentifiers(requestedComids),
+        usgs_gage_ids: splitIdentifiers(requestedGages),
+        sources: Array.from(requestSources),
+        streams: Array.from(selectedStreams),
+        start_time_utc: startTime || null,
+        end_time_utc: endTime || null,
+        formats: [format],
+        preprocessing: {
+          missing_streamflow: missingStreamflow,
+          aggregation
+        }
+      };
+      setAcquisitionResult(
+        await fetchJson("/api/acquisition-requests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
         })
       );
     } catch (err) {
@@ -216,6 +293,80 @@ export default function App() {
             <Filter size={18} />
             <h2>Request</h2>
           </div>
+          <fieldset>
+            <legend>Find Sites</legend>
+            <div className="searchRow">
+              <input
+                type="search"
+                placeholder="COMID, USGS gage, name, or site ID"
+                value={siteQuery}
+                onChange={(event) => setSiteQuery(event.target.value)}
+              />
+              <button type="button" onClick={searchDirectory} disabled={loading} title="Search site directory">
+                <Search size={18} />
+              </button>
+            </div>
+            <div className="sourceGrid">
+              {["nextgen", "nwm", "era5", "usgs"].map((source) => (
+                <label key={source} className="miniCheck">
+                  <input
+                    type="checkbox"
+                    checked={requestSources.has(source)}
+                    onChange={() => toggleRequestSource(source)}
+                  />
+                  <span>{source.toUpperCase()}</span>
+                </label>
+              ))}
+            </div>
+            <div className="segmented compact">
+              {["", "nextgen", "nwm", "era5", "usgs"].map((source) => (
+                <button
+                  key={source || "all"}
+                  className={directorySource === source ? "selected" : ""}
+                  onClick={() => setDirectorySource(source)}
+                  type="button"
+                >
+                  {source ? source.toUpperCase() : "ALL"}
+                </button>
+              ))}
+            </div>
+            <div className="directoryList">
+              {(directory.sites || []).map((site) => (
+                <button
+                  type="button"
+                  key={`${site.site_id}-${site.comid}`}
+                  className={selectedDirectoryIds.has(site.site_id) ? "directoryItem selected" : "directoryItem"}
+                  onClick={() => toggleDirectorySite(site.site_id)}
+                >
+                  <span>
+                    <strong>{site.usgs_gage_id || site.comid || site.site_id}</strong>
+                    {site.name || "Unnamed site"}
+                  </span>
+                  <small>COMID {site.comid || "unknown"} VPU {site.vpu_id || "unknown"}</small>
+                </button>
+              ))}
+            </div>
+            <div className="manualGrid">
+              <label>
+                COMIDs
+                <input value={requestedComids} onChange={(event) => setRequestedComids(event.target.value)} placeholder="comma separated" />
+              </label>
+              <label>
+                USGS Gages
+                <input value={requestedGages} onChange={(event) => setRequestedGages(event.target.value)} placeholder="comma separated" />
+              </label>
+            </div>
+            <button className="requestButton" type="button" onClick={requestAcquisition} disabled={loading || requestSources.size === 0}>
+              <Send size={18} />
+              Submit Acquisition Request
+            </button>
+            {acquisitionResult && (
+              <p className="requestStatus">
+                {acquisitionResult.status}: {acquisitionResult.id}
+              </p>
+            )}
+          </fieldset>
+
           <fieldset>
             <legend>Sites</legend>
             <div className="checkGrid">
@@ -445,4 +596,11 @@ function StatusChip({ icon, label, value, tone }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function splitIdentifiers(value) {
+  return String(value || "")
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
