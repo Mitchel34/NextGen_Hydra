@@ -68,6 +68,10 @@ from .schema_inspection import (
     build_schema_inspection_report,
     write_schema_inspection_report,
 )
+from .site_directory import (
+    SiteDirectoryError,
+    build_paired_site_directory,
+)
 from .tidy import TidyError, tidy_manifest_records
 from .units import (
     UnitsError,
@@ -92,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         TidyError,
         UnitsError,
         BackfillPlanError,
+        SiteDirectoryError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -260,6 +265,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write approved resources with approved_for_download=false",
     )
+    resource_manifest.add_argument(
+        "--all-vpus",
+        action="store_true",
+        help="build a manifest for every configured CONUS hydrofabric VPU",
+    )
+    resource_manifest.add_argument(
+        "--vpu",
+        action="append",
+        dest="resource_vpu_ids",
+        help="build a resource manifest for a specific VPU ID; repeat for multiple VPUs",
+    )
     resource_manifest.set_defaults(func=cmd_build_resource_manifest)
 
     resource_download = subcommands.add_parser("download-resources")
@@ -281,6 +297,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="execute the approved resource plan; also implied by --approval-id",
     )
     resource_download.add_argument("--approval-id", default=None)
+    resource_download.add_argument(
+        "--allow-threshold-report",
+        action="store_true",
+        help="allow dry-run reporting when planned resources exceed unset or active thresholds",
+    )
     resource_download.add_argument(
         "--summary-output",
         type=Path,
@@ -313,6 +334,36 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("reports/site_crosswalk_report.json"),
     )
     crosswalk.set_defaults(func=cmd_resolve_site_crosswalk)
+
+    site_directory = subcommands.add_parser("build-site-directory")
+    site_directory.add_argument("--resource-dir", type=Path, default=None)
+    site_directory.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/catalog/site_directory.jsonl"),
+    )
+    site_directory.add_argument(
+        "--report-output",
+        type=Path,
+        default=Path("reports/site_directory_summary.json"),
+    )
+    site_directory.add_argument(
+        "--report-markdown",
+        type=Path,
+        default=Path("reports/site_directory_summary.md"),
+    )
+    site_directory.add_argument(
+        "--vpu",
+        action="append",
+        dest="vpu_ids",
+        help="limit to a VPU ID, for example 05; repeat for multiple VPUs",
+    )
+    site_directory.add_argument(
+        "--enrich-usgs",
+        action="store_true",
+        help="enrich paired gages with official USGS NWIS site metadata",
+    )
+    site_directory.set_defaults(func=cmd_build_site_directory)
 
     inventory = subcommands.add_parser("inventory")
     inventory.add_argument("--manifest", type=Path, required=False)
@@ -575,6 +626,37 @@ def cmd_plan_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_site_directory(args: argparse.Namespace) -> int:
+    defaults, _sites = _load(args)
+    resource_dir = args.resource_dir or Path(defaults["paths"]["resources_data_dir"])
+    records, report = build_paired_site_directory(
+        resource_dir=resource_dir,
+        output=args.output,
+        report_output=args.report_output,
+        markdown_output=args.report_markdown,
+        vpu_ids=args.vpu_ids,
+        enrich_usgs=args.enrich_usgs,
+    )
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "output": str(args.output),
+                "report_output": str(args.report_output),
+                "report_markdown": str(args.report_markdown),
+                "records": len(records),
+                "unique_usgs_gage_count": report["unique_usgs_gage_count"],
+                "unique_troute_feature_count": report["unique_troute_feature_count"],
+                "vpu_ids": report["vpu_ids"],
+                "scope": report["scope"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_download(args: argparse.Namespace) -> int:
     defaults, sites = _load(args)
     require_all_sites_mapped(sites)
@@ -646,6 +728,8 @@ def cmd_build_resource_manifest(args: argparse.Namespace) -> int:
         defaults=defaults,
         sites=sites,
         approved_for_download=not args.not_approved_for_download,
+        all_vpus=args.all_vpus,
+        vpu_ids=args.resource_vpu_ids,
     )
     write_jsonl(args.output, records)
     summary = build_resource_manifest_summary(
@@ -665,6 +749,8 @@ def cmd_build_resource_manifest(args: argparse.Namespace) -> int:
                 "records": len(records),
                 "unique_objects": summary["unique_object_count"],
                 "total_size_bytes": summary["total_size_bytes"],
+                "resource_scope": summary["resource_scope"],
+                "vpus": summary["vpus"],
                 "summary_output": str(args.summary_output),
                 "summary_markdown": str(args.summary_markdown),
             },
@@ -693,6 +779,7 @@ def cmd_download_resources(args: argparse.Namespace) -> int:
         approval_id=approval_id,
         plan_output=args.plan_output,
         provenance_path=provenance,
+        allow_threshold_report=args.allow_threshold_report,
     )
     write_resource_download_summary(
         path=args.summary_output,

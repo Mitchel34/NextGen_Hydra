@@ -109,6 +109,45 @@ def test_site_directory_search_and_acquisition_request_are_non_executing(tmp_pat
     assert (tmp_path / "data/requests/acquisition_requests.jsonl").is_file()
 
 
+def test_site_directory_search_matches_comid_candidates(tmp_path):
+    from apps.api.artifacts import site_directory, site_map, site_map_summary
+
+    _write_public_fixture(tmp_path)
+    catalog_dir = tmp_path / "data/catalog"
+    catalog_dir.mkdir(parents=True)
+    (catalog_dir / "site_directory.jsonl").write_text(
+        json.dumps(
+            {
+                "site_id": "paired",
+                "name": "Paired Site",
+                "usgs_gage_id": "03161000",
+                "troute_feature_id": 797343,
+                "comid_candidates": [6892192, 6892194],
+                "latitude": 36.39,
+                "longitude": -81.40,
+                "huc": "05050001",
+                "state_code": "37",
+                "availability": {"nextgen": True, "nwm": True, "era5": False, "usgs": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = site_directory(tmp_path, query="6892194")
+
+    assert result["count"] == 1
+    assert result["sites"][0]["site_id"] == "paired"
+    mapped = site_map(tmp_path, query="6892194")
+    summary = site_map_summary(tmp_path)
+    assert mapped["count"] == 1
+    assert mapped["features"][0]["geometry"]["coordinates"] == [-81.4, 36.39]
+    assert summary["map_ready_record_count"] == 1
+    assert summary["vpu_counts"] == {}
+    assert summary["state_counts"] == {"37": 1}
+    assert summary["availability_counts"]["nextgen"] == 1
+
+
 def test_acquisition_request_rejects_unsupported_sources(tmp_path):
     from apps.api.artifacts import ArtifactError, create_acquisition_request
 
@@ -133,6 +172,8 @@ def test_public_api_has_no_download_execution_routes(tmp_path, monkeypatch):
 
     assert client.get("/api/sites").status_code == 200
     assert client.get("/api/site-directory").status_code == 200
+    assert client.get("/api/site-map").status_code == 200
+    assert client.get("/api/site-map/summary").status_code == 200
     response = client.post(
         "/api/acquisition-requests",
         json={"comids": [1], "sources": ["nextgen"]},

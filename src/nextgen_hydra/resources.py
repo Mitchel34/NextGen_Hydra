@@ -10,6 +10,9 @@ from typing import Any, Iterable
 
 from .config import (
     Site,
+    national_resource_download_max_object_bytes,
+    national_resource_download_max_total_bytes,
+    national_resource_vpus,
     resource_download_max_object_bytes,
     resource_download_max_total_bytes,
 )
@@ -27,6 +30,8 @@ from .provenance import append_event, build_event, sha256_file
 
 RESOURCE_MANIFEST_VERSION = 1
 RESOURCE_PRODUCT_TYPE = "hydrofabric_geopackage"
+RESOURCE_SCOPE_CONFIGURED_SITE_VPUS = "configured_site_vpus"
+RESOURCE_SCOPE_ALL_CONUS_VPUS = "all_conus_vpus"
 REQUIRED_RESOURCE_FIELDS = (
     "resource_manifest_version",
     "created_at_utc",
@@ -51,7 +56,15 @@ class ResourceError(RuntimeError):
 
 def resource_key(defaults: dict[str, Any], vpu_id: str) -> str:
     hydro = defaults["nrds"]["hydrofabric_version"]
-    return f"resources/{hydro}/geopackages/VPU_{vpu_id}/nextgen_VPU_{vpu_id}.gpkg"
+    normalized = normalize_vpu_id(vpu_id)
+    return f"resources/{hydro}/geopackages/VPU_{normalized}/nextgen_VPU_{normalized}.gpkg"
+
+
+def normalize_vpu_id(vpu_id: str) -> str:
+    text = str(vpu_id).strip().upper()
+    if text.isdigit():
+        return text.zfill(2)
+    return text
 
 
 def resource_local_path(resource_dir: Path, object_key: str) -> Path:
@@ -67,24 +80,46 @@ def build_resource_manifest_records(
     defaults: dict[str, Any],
     sites: list[Site],
     approved_for_download: bool = True,
+    all_vpus: bool = False,
+    vpu_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build a manifest for only the configured VPU hydrofabric geopackages."""
+    """Build a manifest for approved hydrofabric geopackages."""
 
     base_url = defaults["nrds"]["public_s3_base_url"]
     bucket = defaults["nrds"]["s3_bucket"]
     created_at = datetime.now(UTC).isoformat()
     records: list[dict[str, Any]] = []
-    for vpu_id in sorted({str(site.discovered_vpu_id) for site in sites if site.discovered_vpu_id}):
+    if all_vpus and vpu_ids:
+        raise ResourceError("use either all_vpus=True or explicit vpu_ids, not both")
+    if all_vpus:
+        selected_vpus = national_resource_vpus(defaults)
+        scope = RESOURCE_SCOPE_ALL_CONUS_VPUS
+    elif vpu_ids:
+        selected_vpus = [normalize_vpu_id(vpu_id) for vpu_id in vpu_ids]
+        scope = "custom_vpus"
+    else:
+        selected_vpus = sorted(
+            {normalize_vpu_id(str(site.discovered_vpu_id)) for site in sites if site.discovered_vpu_id}
+        )
+        scope = RESOURCE_SCOPE_CONFIGURED_SITE_VPUS
+    site_ids_by_vpu = {
+        vpu_id: sorted(
+            site.site_id
+            for site in sites
+            if site.discovered_vpu_id and normalize_vpu_id(str(site.discovered_vpu_id)) == vpu_id
+        )
+        for vpu_id in selected_vpus
+    }
+    for vpu_id in selected_vpus:
         key = resource_key(defaults, vpu_id)
         metadata = head_object(bucket=bucket, key=key)
         records.append(
             {
                 "resource_manifest_version": RESOURCE_MANIFEST_VERSION,
                 "created_at_utc": created_at,
+                "resource_scope": scope,
                 "vpu_id": vpu_id,
-                "site_ids": sorted(
-                    site.site_id for site in sites if str(site.discovered_vpu_id) == vpu_id
-                ),
+                "site_ids": site_ids_by_vpu.get(vpu_id, []),
                 "resource_type": RESOURCE_PRODUCT_TYPE,
                 "object_key": key,
                 "public_url": public_url(base_url, key),
@@ -102,6 +137,7 @@ def build_resource_manifest_records(
         defaults,
         sites=sites,
         require_download_approval=approved_for_download,
+        resource_scope=scope,
     )
     return records
 
@@ -122,9 +158,9 @@ def build_resource_manifest_summary(
         "total_size_bytes": sum(int(row["size_bytes"]) for row in rows),
         "resource_type_counts": dict(Counter(row["resource_type"] for row in rows)),
         "vpus": sorted({str(row["vpu_id"]) for row in rows}),
+        "resource_scope": _resource_scope(rows),
         "safety_thresholds": {
-            "max_object_bytes": resource_download_max_object_bytes(defaults),
-            "max_total_bytes": resource_download_max_total_bytes(defaults),
+            **_resource_thresholds(defaults, _resource_scope(rows)),
         },
     }
 
@@ -153,6 +189,7 @@ def render_resource_manifest_summary_markdown(summary: dict[str, Any]) -> str:
             f"- Unique objects: {summary['unique_object_count']}",
             f"- Total bytes: {summary['total_size_bytes']}",
             f"- Resource type counts: `{summary['resource_type_counts']}`",
+            f"- Resource scope: `{summary.get('resource_scope')}`",
             f"- VPUs: `{summary['vpus']}`",
             "",
         ]
@@ -165,13 +202,17 @@ def validate_resource_manifest_records(
     *,
     sites: list[Site] | None = None,
     require_download_approval: bool = True,
+    resource_scope: str | None = None,
 ) -> list[dict[str, Any]]:
     rows = [dict(row) for row in records]
+    scope = resource_scope or _resource_scope(rows)
     allowed_vpus = (
-        {str(site.discovered_vpu_id) for site in sites if site.discovered_vpu_id}
+        {normalize_vpu_id(str(site.discovered_vpu_id)) for site in sites if site.discovered_vpu_id}
         if sites is not None
         else None
     )
+    if scope == RESOURCE_SCOPE_ALL_CONUS_VPUS:
+        allowed_vpus = set(national_resource_vpus(defaults))
     errors: list[str] = []
     for index, row in enumerate(rows, start=1):
         missing = [
@@ -182,10 +223,12 @@ def validate_resource_manifest_records(
         if missing:
             errors.append(f"row {index}: missing required fields: {missing}")
             continue
-        vpu_id = str(row["vpu_id"])
+        vpu_id = normalize_vpu_id(str(row["vpu_id"]))
         expected_key = resource_key(defaults, vpu_id)
         if allowed_vpus is not None and vpu_id not in allowed_vpus:
-            errors.append(f"row {index}: VPU_{vpu_id} is not configured in sites")
+            errors.append(f"row {index}: VPU_{vpu_id} is not approved for scope {scope}")
+        if row.get("resource_scope") and str(row["resource_scope"]) != scope:
+            errors.append(f"row {index}: resource_scope does not match {scope}")
         if row["object_key"] != expected_key:
             errors.append(
                 f"row {index}: object_key must be exact approved geopackage {expected_key!r}"
@@ -201,7 +244,7 @@ def validate_resource_manifest_records(
         size = _coerce_size(row.get("size_bytes"), index, errors)
         if size is not None and size < 0:
             errors.append(f"row {index}: size_bytes is negative")
-    _validate_expected_resource_set(rows, defaults, errors)
+    _validate_expected_resource_set(rows, defaults, errors, resource_scope=scope)
     if errors:
         raise ResourceError("resource manifest validation failed:\n" + "\n".join(errors))
     if not rows:
@@ -215,6 +258,7 @@ def plan_resource_downloads(
     defaults: dict[str, Any],
     *,
     sites: list[Site] | None = None,
+    allow_threshold_report: bool = False,
 ) -> list[dict[str, Any]]:
     validated = validate_resource_manifest_records(records, defaults, sites=sites)
     plan: list[dict[str, Any]] = []
@@ -245,6 +289,7 @@ def plan_resource_downloads(
                 "last_modified": row["last_modified"],
                 "vpu_id": row["vpu_id"],
                 "site_ids": row["site_ids"],
+                "resource_scope": row.get("resource_scope") or _resource_scope(validated),
                 "manifest_row_count": 1,
             }
         )
@@ -261,27 +306,41 @@ def download_resource_manifest_file(
     approval_id: str | None = None,
     plan_output: Path | None = None,
     provenance_path: Path | None = None,
+    allow_threshold_report: bool = False,
 ) -> list[dict[str, Any]]:
     approval_id = normalize_approval_id(approval_id)
     if execute and not approval_id:
         raise DownloadSafetyError("resource downloads require an explicit approval_id")
     rows = _read_resource_jsonl(manifest_path)
-    plan = plan_resource_downloads(rows, resource_dir, defaults, sites=sites)
+    plan = plan_resource_downloads(
+        rows,
+        resource_dir,
+        defaults,
+        sites=sites,
+        allow_threshold_report=allow_threshold_report,
+    )
     total_download_bytes = sum(
         row["size_bytes"] for row in plan if row["action"] in {"download", "replace"}
     )
-    max_total = resource_download_max_total_bytes(defaults)
-    max_object = resource_download_max_object_bytes(defaults)
+    scope = _resource_scope(rows)
+    thresholds = _resource_thresholds(defaults, scope)
+    max_total = thresholds["max_total_bytes"]
+    max_object = thresholds["max_object_bytes"]
     oversized = [
         row for row in plan if int(row["size_bytes"]) > max_object
     ]
-    if oversized and not approval_id:
+    if oversized and not approval_id and not (allow_threshold_report and not execute):
         raise DownloadSafetyError(
             "planned resource object exceeds active threshold "
             f"{max_object} bytes; approval is required: "
             + ", ".join(str(row["object_key"]) for row in oversized)
         )
-    if total_download_bytes > max_total and not approval_id:
+    if (
+        max_total is not None
+        and total_download_bytes > max_total
+        and not approval_id
+        and not (allow_threshold_report and not execute)
+    ):
         raise DownloadSafetyError(
             f"planned resource total {total_download_bytes} exceeds active threshold "
             f"{max_total} bytes; approval is required"
@@ -376,9 +435,9 @@ def write_resource_download_summary(
         "actions": dict(Counter(row["action"] for row in plan)),
         "executed_bytes": sum(int(row.get("executed_size_bytes") or 0) for row in plan),
         "safety_thresholds": {
-            "max_object_bytes": resource_download_max_object_bytes(defaults),
-            "max_total_bytes": resource_download_max_total_bytes(defaults),
+            **_resource_thresholds(defaults, _resource_scope(plan)),
         },
+        "threshold_status": _threshold_status(plan, defaults),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -429,7 +488,23 @@ def _validate_expected_resource_set(
     rows: list[dict[str, Any]],
     defaults: dict[str, Any],
     errors: list[str],
+    *,
+    resource_scope: str,
 ) -> None:
+    if resource_scope == RESOURCE_SCOPE_ALL_CONUS_VPUS:
+        expected_keys = sorted(resource_key(defaults, vpu_id) for vpu_id in national_resource_vpus(defaults))
+        actual_keys = sorted(str(row.get("object_key")) for row in rows)
+        if actual_keys != expected_keys:
+            errors.append(
+                "all-VPU resource manifest keys do not match approved CONUS VPU set; "
+                f"expected {expected_keys}, found {actual_keys}"
+            )
+        return
+    if resource_scope not in {RESOURCE_SCOPE_CONFIGURED_SITE_VPUS, "custom_vpus"}:
+        errors.append(f"unsupported resource scope: {resource_scope}")
+        return
+    if resource_scope == "custom_vpus":
+        return
     config = defaults["resource_download"]
     expected_keys = sorted(str(key) for key in config.get("expected_keys", []))
     actual_keys = sorted(str(row.get("object_key")) for row in rows)
@@ -541,3 +616,47 @@ def _clean_etag(raw: Any) -> str | None:
         return None
     text = str(raw).strip().strip('"')
     return text or None
+
+
+def _resource_scope(rows: Iterable[dict[str, Any]]) -> str:
+    scopes = {
+        str(row.get("resource_scope"))
+        for row in rows
+        if row.get("resource_scope") not in (None, "")
+    }
+    if len(scopes) == 1:
+        return next(iter(scopes))
+    if len(scopes) > 1:
+        raise ResourceError(f"resource rows contain mixed scopes: {sorted(scopes)}")
+    return RESOURCE_SCOPE_CONFIGURED_SITE_VPUS
+
+
+def _resource_thresholds(defaults: dict[str, Any], scope: str) -> dict[str, int | None]:
+    if scope == RESOURCE_SCOPE_ALL_CONUS_VPUS:
+        return {
+            "max_object_bytes": national_resource_download_max_object_bytes(defaults),
+            "max_total_bytes": national_resource_download_max_total_bytes(defaults),
+        }
+    return {
+        "max_object_bytes": resource_download_max_object_bytes(defaults),
+        "max_total_bytes": resource_download_max_total_bytes(defaults),
+    }
+
+
+def _threshold_status(plan: list[dict[str, Any]], defaults: dict[str, Any]) -> dict[str, Any]:
+    scope = _resource_scope(plan)
+    thresholds = _resource_thresholds(defaults, scope)
+    max_object = thresholds["max_object_bytes"]
+    max_total = thresholds["max_total_bytes"]
+    planned_bytes = sum(
+        int(row["size_bytes"]) for row in plan if row["action"] in {"download", "replace"}
+    )
+    max_planned_object = max((int(row["size_bytes"]) for row in plan), default=0)
+    return {
+        "resource_scope": scope,
+        "planned_download_bytes": planned_bytes,
+        "max_planned_object_bytes": max_planned_object,
+        "max_object_exceeded": max_planned_object > int(max_object),
+        "max_total_exceeded": None if max_total is None else planned_bytes > int(max_total),
+        "max_total_configured": max_total is not None,
+    }

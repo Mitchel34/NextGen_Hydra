@@ -7,6 +7,7 @@ import pytest
 from nextgen_hydra.download import DownloadSafetyError
 from nextgen_hydra.manifest import write_jsonl
 from nextgen_hydra.resources import (
+    RESOURCE_SCOPE_ALL_CONUS_VPUS,
     RESOURCE_PRODUCT_TYPE,
     ResourceError,
     build_resource_manifest_records,
@@ -42,6 +43,38 @@ def test_resource_manifest_allows_only_configured_vpu_geopackages(defaults, monk
         resource_key(defaults, "05"),
         resource_key(defaults, "06"),
     }
+
+
+def test_resource_manifest_can_build_all_conus_vpus(defaults, monkeypatch):
+    seen = []
+
+    def fake_head_object(key, **_kwargs):
+        seen.append(key)
+        return {
+            "size_bytes": 10,
+            "etag": "resource-etag",
+            "last_modified": "2026-05-24T00:00:00Z",
+        }
+
+    monkeypatch.setattr("nextgen_hydra.resources.head_object", fake_head_object)
+
+    records = build_resource_manifest_records(
+        defaults=defaults,
+        sites=[mapped_site("05")],
+        all_vpus=True,
+    )
+
+    assert len(records) == len(defaults["resource_download"]["conus_vpus"])
+    assert {record["resource_scope"] for record in records} == {RESOURCE_SCOPE_ALL_CONUS_VPUS}
+    assert seen == [
+        resource_key(defaults, vpu_id)
+        for vpu_id in defaults["resource_download"]["conus_vpus"]
+    ]
+    assert validate_resource_manifest_records(
+        records,
+        defaults,
+        sites=[mapped_site("05")],
+    ) == records
 
 
 def test_resource_manifest_rejects_outputs_forcings_and_non_gpkg(defaults):
@@ -120,6 +153,53 @@ def test_resource_thresholds_require_approval(defaults, tmp_path):
         approval_id="RESOURCE_APPROVAL",
     )
     assert len(plan) == 2
+
+
+def test_all_vpu_resource_dry_run_can_report_thresholds(defaults, tmp_path):
+    national = deepcopy(defaults)
+    national["resource_download"]["national_resource_max_total_mb"] = 1
+    rows = []
+    for vpu_id in national["resource_download"]["conus_vpus"]:
+        rows.append(
+            {
+                "resource_manifest_version": 1,
+                "created_at_utc": "2026-05-24T00:00:00Z",
+                "resource_scope": RESOURCE_SCOPE_ALL_CONUS_VPUS,
+                "vpu_id": vpu_id,
+                "site_ids": [],
+                "resource_type": RESOURCE_PRODUCT_TYPE,
+                "object_key": resource_key(national, vpu_id),
+                "public_url": "https://example.test/resource.gpkg",
+                "format": "gpkg",
+                "size_bytes": 1024 * 1024,
+                "etag": "etag",
+                "last_modified": "2026-05-24T00:00:00Z",
+                "classification": "approved",
+                "classification_reason": "fixture",
+                "approved_for_download": True,
+            }
+        )
+    manifest_path = tmp_path / "resource_manifest_all_vpus.jsonl"
+    write_jsonl(manifest_path, rows)
+
+    with pytest.raises(DownloadSafetyError, match="approval is required"):
+        download_resource_manifest_file(
+            manifest_path=manifest_path,
+            resource_dir=tmp_path / "resources",
+            defaults=national,
+            sites=[mapped_site("05")],
+        )
+
+    plan = download_resource_manifest_file(
+        manifest_path=manifest_path,
+        resource_dir=tmp_path / "resources",
+        defaults=national,
+        sites=[mapped_site("05")],
+        allow_threshold_report=True,
+    )
+
+    assert len(plan) == len(national["resource_download"]["conus_vpus"])
+    assert {row["resource_scope"] for row in plan} == {RESOURCE_SCOPE_ALL_CONUS_VPUS}
 
 
 def _resource_records(defaults):

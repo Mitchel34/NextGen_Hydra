@@ -8,7 +8,9 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any
+from urllib.request import Request
 from urllib.request import urlopen
 
 from .config import proof_download_max_total_bytes
@@ -28,6 +30,10 @@ PLACEHOLDER_APPROVAL_IDS = {
     "TODO",
     "TBD",
 }
+DOWNLOAD_READ_TIMEOUT_SECONDS = 60
+DOWNLOAD_RETRY_COUNT = 3
+DOWNLOAD_RETRY_BACKOFF_SECONDS = 5
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def normalize_approval_id(approval_id: str | None) -> str | None:
@@ -268,13 +274,32 @@ def _unique_download_records(records: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _download_one(url: str, local_path: Path) -> None:
-    with tempfile.NamedTemporaryFile(
-        "wb", delete=False, dir=str(local_path.parent), suffix=".part"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-        with urlopen(url, timeout=60) as response:
-            shutil.copyfileobj(response, tmp)
-    tmp_path.replace(local_path)
+    last_error: Exception | None = None
+    for attempt in range(1, DOWNLOAD_RETRY_COUNT + 1):
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb", delete=False, dir=str(local_path.parent), suffix=".part"
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                request = Request(url, headers={"User-Agent": "nextgen-hydra/1"})
+                with urlopen(request, timeout=DOWNLOAD_READ_TIMEOUT_SECONDS) as response:
+                    while True:
+                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        tmp.write(chunk)
+            tmp_path.replace(local_path)
+            return
+        except Exception as exc:
+            last_error = exc
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
+            if attempt < DOWNLOAD_RETRY_COUNT:
+                time.sleep(DOWNLOAD_RETRY_BACKOFF_SECONDS * attempt)
+    raise DownloadSafetyError(
+        f"download failed after {DOWNLOAD_RETRY_COUNT} attempts: {last_error}"
+    ) from last_error
 
 
 def _log_download_event(

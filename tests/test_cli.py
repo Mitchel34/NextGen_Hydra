@@ -168,3 +168,41 @@ def test_plan_backfill_cli_writes_dry_run_outputs(repo_root, tmp_path, monkeypat
     assert (tmp_path / "backfill_discovery.jsonl").is_file()
     assert (tmp_path / "backfill_summary.json").is_file()
     assert (tmp_path / "backfill_summary.md").is_file()
+
+
+def test_build_resource_manifest_cli_all_vpus(repo_root, tmp_path, monkeypatch):
+    def fake_build_resource_manifest_records(**kwargs):
+        assert kwargs["all_vpus"] is True
+        return [
+            {
+                "object_key": "resources/v2.2_hydrofabric/geopackages/VPU_01/nextgen_VPU_01.gpkg",
+                "resource_type": "hydrofabric_geopackage",
+                "resource_scope": "all_conus_vpus",
+                "vpu_id": "01",
+                "size_bytes": 1,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "nextgen_hydra.cli.build_resource_manifest_records",
+        fake_build_resource_manifest_records,
+    )
+
+    code = main(
+        [
+            "--root",
+            str(repo_root),
+            "build-resource-manifest",
+            "--all-vpus",
+            "--output",
+            str(tmp_path / "resource_manifest_all_vpus.jsonl"),
+            "--summary-output",
+            str(tmp_path / "resource_manifest_summary.json"),
+            "--summary-markdown",
+            str(tmp_path / "resource_manifest_summary.md"),
+        ]
+    )
+
+    assert code == 0
+    assert (tmp_path / "resource_manifest_all_vpus.jsonl").is_file()
+    assert (tmp_path / "resource_manifest_summary.json").is_file()

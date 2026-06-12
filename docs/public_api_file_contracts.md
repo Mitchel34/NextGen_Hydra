@@ -55,12 +55,64 @@ Directory records should use this shape:
 - `site_id`: stable site identifier.
 - `name`: display name.
 - `comid` or `hydrofabric_feature_id`: NHD/hydrofabric feature ID when known.
+- `comid_candidates`: all candidate NHD/hydrofabric IDs when one t-route
+  feature joins to multiple `network.hf_id` values.
+- `comid_status`: `single_match`, `multiple_candidates`, or `missing`.
 - `troute_feature_id`: resolved t-route feature ID when known.
+- `troute_id`: raw t-route waterbody ID, for example `wb-797343`.
 - `usgs_gage_id`: USGS station ID when known.
 - `vpu_id`: hydrofabric VPU when known.
+- `latitude` and `longitude`: map coordinates from official USGS NWIS metadata
+  when available.
+- `huc`: USGS HUC code when available.
+- `state_code`: USGS state code when available.
+- `marker_status`: map marker state, currently `paired` for generated paired
+  directory rows.
+- `search_tokens`: precomputed tokens for client-side search.
 - `availability.nextgen`, `availability.nwm`, `availability.era5`,
   `availability.usgs`: booleans indicating local/cataloged availability.
 - `status`: for example `available`, `configured`, `unresolved`, or `review`.
+
+`GET /api/site-map` returns GeoJSON-like point features for map-ready directory
+records. It supports `query`, `source`, `vpu`, `state`, `huc`, and `limit`
+filters.
+
+`GET /api/site-map/summary` returns map-ready counts, VPU counts, state counts,
+and source availability counts.
+
+The admin CLI can build this directory from approved local hydrofabric
+geopackages:
+
+```bash
+.venv/bin/nextgen-hydra build-site-directory \
+  --enrich-usgs \
+  --output data/catalog/site_directory.jsonl \
+  --report-output reports/site_directory_summary.json \
+  --report-markdown reports/site_directory_summary.md
+```
+
+The generated directory is scoped to local approved GPKG resources. It is not a
+full national inventory unless all national hydrofabric GPKGs have been acquired
+through the resource workflow and supplied to the command.
+
+All-CONUS resource discovery/planning is an admin CLI dry-run workflow:
+
+```bash
+.venv/bin/nextgen-hydra build-resource-manifest \
+  --all-vpus \
+  --output manifests/resource_manifest_all_vpus.jsonl \
+  --summary-output reports/resource_manifest_all_vpus_summary.json \
+  --summary-markdown reports/resource_manifest_all_vpus_summary.md
+
+.venv/bin/nextgen-hydra download-resources \
+  --manifest manifests/resource_manifest_all_vpus.jsonl \
+  --plan-output reports/resource_download_plan_all_vpus.jsonl \
+  --summary-output reports/resource_download_summary_all_vpus.json \
+  --summary-markdown reports/resource_download_summary_all_vpus.md
+```
+
+The dry-run command writes a plan and summary only. Downloading the remaining
+national GPKG resources requires a separate explicit approval ID.
 
 ## Export Contract
 

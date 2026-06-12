@@ -112,6 +112,58 @@ def site_directory_detail(identifier: str, root: Path | None = None) -> dict[str
     raise ArtifactError(f"site directory entry is not available: {identifier}")
 
 
+def site_map(
+    root: Path | None = None,
+    *,
+    query: str | None = None,
+    source: str | None = None,
+    vpu: str | None = None,
+    state: str | None = None,
+    huc: str | None = None,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    root = root or project_root()
+    directory = site_directory(root, query=query, source=source, limit=250000)["sites"]
+    if vpu:
+        directory = [row for row in directory if str(row.get("vpu_id")) == str(vpu).zfill(2)]
+    if state:
+        directory = [row for row in directory if str(row.get("state_code") or "") == str(state)]
+    if huc:
+        directory = [row for row in directory if str(row.get("huc") or "").startswith(str(huc))]
+    features = [
+        _site_map_feature(row)
+        for row in directory
+        if row.get("latitude") is not None and row.get("longitude") is not None
+    ]
+    limit = max(1, min(int(limit or 5000), 250000))
+    return {
+        "status": "available",
+        "count": len(features[:limit]),
+        "total_matching_map_ready_count": len(features),
+        "features": features[:limit],
+    }
+
+
+def site_map_summary(root: Path | None = None) -> dict[str, Any]:
+    root = root or project_root()
+    rows = _site_directory_records(root)
+    map_ready = [
+        row for row in rows if row.get("latitude") is not None and row.get("longitude") is not None
+    ]
+    return {
+        "status": "available",
+        "directory_source": _site_directory_source(root),
+        "record_count": len(rows),
+        "map_ready_record_count": len(map_ready),
+        "vpu_counts": _count_values(rows, "vpu_id"),
+        "state_counts": _count_values(rows, "state_code"),
+        "availability_counts": {
+            source: sum(1 for row in rows if (row.get("availability") or {}).get(source))
+            for source in sorted(SOURCE_KEYS)
+        },
+    }
+
+
 def create_acquisition_request(
     payload: dict[str, Any],
     root: Path | None = None,
@@ -752,12 +804,24 @@ def _normalise_directory_row(row: dict[str, Any]) -> dict[str, Any]:
     availability = row.get("availability")
     if not isinstance(availability, dict):
         availability = row.get("sources") if isinstance(row.get("sources"), dict) else {}
+    comid_candidates = [
+        value for value in (_optional_int(item) for item in row.get("comid_candidates") or []) if value is not None
+    ]
     return {
         "site_id": str(row.get("site_id") or row.get("id") or ""),
         "name": str(row.get("name") or row.get("description") or ""),
         "comid": _optional_int(row.get("comid") or row.get("hydrofabric_feature_id")),
         "hydrofabric_feature_id": _optional_int(row.get("hydrofabric_feature_id") or row.get("comid")),
         "troute_feature_id": _optional_int(row.get("troute_feature_id")),
+        "troute_id": row.get("troute_id"),
+        "comid_candidates": comid_candidates,
+        "comid_status": row.get("comid_status"),
+        "latitude": _optional_float(row.get("latitude") or (row.get("usgs") or {}).get("dec_lat_va")),
+        "longitude": _optional_float(row.get("longitude") or (row.get("usgs") or {}).get("dec_long_va")),
+        "huc": row.get("huc") or (row.get("usgs") or {}).get("huc_cd"),
+        "state_code": row.get("state_code") or (row.get("usgs") or {}).get("state_cd"),
+        "marker_status": row.get("marker_status") or row.get("status") or "available",
+        "search_tokens": [str(value) for value in row.get("search_tokens") or [] if value not in (None, "")],
         "usgs_gage_id": None if row.get("usgs_gage_id") in (None, "") else str(row.get("usgs_gage_id")),
         "vpu_id": None if row.get("vpu_id") in (None, "") else str(row.get("vpu_id")),
         "availability": {key: bool(availability.get(key)) for key in SOURCE_KEYS},
@@ -777,6 +841,10 @@ def _directory_match(row: dict[str, Any], needle: str) -> bool:
             row.get("troute_feature_id"),
             row.get("usgs_gage_id"),
             row.get("vpu_id"),
+            " ".join(str(value) for value in row.get("comid_candidates") or []),
+            " ".join(str(value) for value in row.get("search_tokens") or []),
+            row.get("huc") or (row.get("usgs") or {}).get("huc_cd"),
+            row.get("state_code") or (row.get("usgs") or {}).get("state_cd"),
         )
         if value not in (None, "")
     ).lower()
@@ -792,9 +860,46 @@ def _directory_identifier_match(row: dict[str, Any], needle: str) -> bool:
             row.get("hydrofabric_feature_id"),
             row.get("troute_feature_id"),
             row.get("usgs_gage_id"),
+            *(row.get("comid_candidates") or []),
         )
         if value not in (None, "")
     }
+
+
+def _site_map_feature(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [row["longitude"], row["latitude"]],
+        },
+        "properties": {
+            "site_id": row.get("site_id"),
+            "name": row.get("name"),
+            "usgs_gage_id": row.get("usgs_gage_id"),
+            "troute_feature_id": row.get("troute_feature_id"),
+            "troute_id": row.get("troute_id"),
+            "comid": row.get("comid"),
+            "comid_candidates": row.get("comid_candidates") or [],
+            "comid_status": row.get("comid_status"),
+            "vpu_id": row.get("vpu_id"),
+            "huc": row.get("huc"),
+            "state_code": row.get("state_code"),
+            "availability": row.get("availability") or {},
+            "marker_status": row.get("marker_status"),
+        },
+    }
+
+
+def _count_values(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = row.get(field)
+        if value in (None, ""):
+            continue
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _normalise_acquisition_request(payload: dict[str, Any], root: Path) -> dict[str, Any]:
@@ -905,6 +1010,15 @@ def _optional_int(raw: Any) -> int | None:
         return None
     try:
         return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(raw: Any) -> float | None:
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
     except (TypeError, ValueError):
         return None
 

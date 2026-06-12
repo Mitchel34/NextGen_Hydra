@@ -172,6 +172,53 @@ Real resource downloads also require a concrete approval ID:
   --summary-markdown reports/resource_download_summary.md
 ```
 
+National paired-site directory resource planning is separate from model-output
+downloads. Build a metadata-only all-VPU hydrofabric manifest first:
+
+```bash
+.venv/bin/nextgen-hydra build-resource-manifest \
+  --all-vpus \
+  --output manifests/resource_manifest_all_vpus.jsonl \
+  --summary-output reports/resource_manifest_all_vpus_summary.json \
+  --summary-markdown reports/resource_manifest_all_vpus_summary.md
+```
+
+Then run a dry-run plan. This does not download object bodies:
+
+```bash
+.venv/bin/nextgen-hydra download-resources \
+  --manifest manifests/resource_manifest_all_vpus.jsonl \
+  --plan-output reports/resource_download_plan_all_vpus.jsonl \
+  --summary-output reports/resource_download_summary_all_vpus.json \
+  --summary-markdown reports/resource_download_summary_all_vpus.md
+```
+
+The current all-VPU dry run plans 21 GPKGs, sees the existing 2 local VPUs as
+`skip_existing`, plans 19 new downloads, reports 4,588,531,712 total bytes
+across all resources, and executes 0 bytes. A new explicit approval ID is
+required before downloading the remaining 19 resource GPKGs.
+
+Approved execution template:
+
+```bash
+.venv/bin/nextgen-hydra download-resources \
+  --manifest manifests/resource_manifest_all_vpus.jsonl \
+  --approval-id APPROVED_HYDROFABRIC_ALL_VPUS_DIRECTORY_YYYYMMDD \
+  --plan-output reports/resource_download_plan_all_vpus.jsonl \
+  --summary-output reports/resource_download_summary_all_vpus.json \
+  --summary-markdown reports/resource_download_summary_all_vpus.md
+```
+
+After execution, rebuild the national directory without `--vpu` filters:
+
+```bash
+.venv/bin/nextgen-hydra build-site-directory \
+  --enrich-usgs \
+  --output data/catalog/site_directory.jsonl \
+  --report-output reports/site_directory_summary.json \
+  --report-markdown reports/site_directory_summary.md
+```
+
 Resolve the crosswalk only after the approved GPKGs are present:
 
 ```bash
@@ -257,6 +304,28 @@ an acquisition request. Public acquisition requests are queued under
 large all-site directory can be materialized later as
 `data/catalog/site_directory.jsonl`; until then the API falls back to the
 configured project sites.
+
+Build the local paired NextGen/USGS directory from approved hydrofabric
+geopackages:
+
+```bash
+.venv/bin/nextgen-hydra build-site-directory \
+  --vpu 05 \
+  --vpu 06 \
+  --enrich-usgs \
+  --output data/catalog/site_directory.jsonl \
+  --report-output reports/site_directory_summary.json \
+  --report-markdown reports/site_directory_summary.md
+```
+
+This command reads local GPKG resources only and does not download model-output
+object bodies. `--enrich-usgs` calls the official USGS NWIS site service for
+station names and coordinates. Rows preserve all COMID candidates when a
+t-route feature maps to multiple `network.hf_id` values.
+
+The API exposes map-ready directory records through `/api/site-map` and
+`/api/site-map/summary`. Coordinates come from USGS NWIS metadata when
+available.
 
 Run the API:
 

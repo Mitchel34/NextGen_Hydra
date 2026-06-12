@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -30,6 +32,9 @@ function statusTone(status) {
 }
 
 export default function App() {
+  const mapElementRef = useRef(null);
+  const leafletMapRef = useRef(null);
+  const markerLayerRef = useRef(null);
   const [sites, setSites] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [status, setStatus] = useState({ status: "loading" });
@@ -38,6 +43,10 @@ export default function App() {
   const [exportOptions, setExportOptions] = useState({ columns: [], preprocessing: {} });
   const [schema, setSchema] = useState({ status: "loading", errors: [] });
   const [directory, setDirectory] = useState({ sites: [], supported_sources: [] });
+  const [mapSummary, setMapSummary] = useState({ record_count: 0, map_ready_record_count: 0, vpu_counts: {} });
+  const [mapResult, setMapResult] = useState({ count: 0, total_matching_map_ready_count: 0, features: [] });
+  const [mapFilters, setMapFilters] = useState({ query: "", vpu: "", source: "", state: "", huc: "" });
+  const [selectedMapSite, setSelectedMapSite] = useState(null);
   const [siteQuery, setSiteQuery] = useState("");
   const [directorySource, setDirectorySource] = useState("");
   const [selectedDirectoryIds, setSelectedDirectoryIds] = useState(new Set());
@@ -69,11 +78,57 @@ export default function App() {
     refresh();
   }, []);
 
+  useEffect(() => {
+    if (!mapElementRef.current || leafletMapRef.current) return;
+    const map = L.map(mapElementRef.current, {
+      preferCanvas: true,
+      scrollWheelZoom: false
+    }).setView([39.5, -96], 4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 12,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    leafletMapRef.current = map;
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    return () => {
+      map.remove();
+      leafletMapRef.current = null;
+      markerLayerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    const layer = markerLayerRef.current;
+    if (!map || !layer) return;
+    layer.clearLayers();
+    const bounds = [];
+    for (const feature of mapResult.features || []) {
+      const [longitude, latitude] = feature.geometry?.coordinates || [];
+      if (latitude == null || longitude == null) continue;
+      const properties = feature.properties || {};
+      const marker = L.circleMarker([latitude, longitude], {
+        radius: 5,
+        color: "#24535d",
+        weight: 1,
+        fillColor: "#2f7f6f",
+        fillOpacity: 0.72
+      });
+      marker.bindTooltip(properties.name || properties.usgs_gage_id || properties.site_id || "Paired site");
+      marker.on("click", () => setSelectedMapSite(properties));
+      marker.addTo(layer);
+      bounds.push([latitude, longitude]);
+    }
+    if (bounds.length) {
+      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 8 });
+    }
+  }, [mapResult.features]);
+
   async function refresh() {
     setLoading(true);
     setError("");
     try {
-      const [statusData, siteData, datasetData, schemaData, qcData, unitsData, optionsData, directoryData] = await Promise.all([
+      const [statusData, siteData, datasetData, schemaData, qcData, unitsData, optionsData, directoryData, mapSummaryData, mapData] = await Promise.all([
         fetchJson("/api/status"),
         fetchJson("/api/sites"),
         fetchJson("/api/datasets"),
@@ -81,7 +136,9 @@ export default function App() {
         fetchJson("/api/qc"),
         fetchJson("/api/units"),
         fetchJson("/api/export-options"),
-        fetchJson("/api/site-directory?limit=10")
+        fetchJson("/api/site-directory?limit=10"),
+        fetchJson("/api/site-map/summary"),
+        fetchJson("/api/site-map?limit=25000")
       ]);
       setStatus(statusData || { status: "missing" });
       setSites(siteData.sites || []);
@@ -91,6 +148,8 @@ export default function App() {
       setUnits(unitsData || { status: "missing", evidence: [] });
       setExportOptions(optionsData || { columns: [], preprocessing: {} });
       setDirectory(directoryData || { sites: [], supported_sources: [] });
+      setMapSummary(mapSummaryData || { record_count: 0, map_ready_record_count: 0, vpu_counts: {} });
+      setMapResult(mapData || { count: 0, total_matching_map_ready_count: 0, features: [] });
       setSelectedSites(new Set((siteData.sites || []).map((site) => site.site_id)));
       setSelectedStreams(new Set((datasetData.datasets || []).map((dataset) => dataset.stream)));
       setSelectedColumns(new Set((optionsData.columns || [])));
@@ -187,6 +246,43 @@ export default function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function searchMap() {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ limit: "25000" });
+      for (const [key, value] of Object.entries(mapFilters)) {
+        if (value) params.set(key, value);
+      }
+      setMapResult(await fetchJson(`/api/site-map?${params.toString()}`));
+      setSelectedMapSite(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateMapFilter(key, value) {
+    setMapFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function useMapSiteForRequest(site) {
+    if (!site) return;
+    if (site.site_id) {
+      setSelectedDirectoryIds(new Set([site.site_id]));
+    }
+    setSiteQuery(site.usgs_gage_id || site.comid || site.name || "");
+    setRequestedGages(site.usgs_gage_id || "");
+    setRequestedComids(String(site.comid || (site.comid_candidates || [])[0] || ""));
+    const sources = Object.entries(site.availability || {})
+      .filter(([, available]) => available)
+      .map(([source]) => source);
+    if (sources.length) {
+      setRequestSources(new Set(sources));
     }
   }
 
@@ -365,6 +461,10 @@ export default function App() {
                 {acquisitionResult.status}: {acquisitionResult.id}
               </p>
             )}
+            <div className="mapSummary">
+              <strong>{mapSummary.map_ready_record_count || 0}</strong>
+              <span>map-ready paired sites across {Object.keys(mapSummary.vpu_counts || {}).length} VPUs</span>
+            </div>
           </fieldset>
 
           <fieldset>
@@ -499,6 +599,66 @@ export default function App() {
           <div className="panelHeader">
             <Database size={18} />
             <h2>Datasets</h2>
+          </div>
+          <div className="mapPanel" aria-label="National paired-site map">
+            <div className="mapToolbar">
+              <input
+                type="search"
+                placeholder="Search gage, COMID, name, HUC"
+                value={mapFilters.query}
+                onChange={(event) => updateMapFilter("query", event.target.value)}
+              />
+              <input
+                value={mapFilters.vpu}
+                onChange={(event) => updateMapFilter("vpu", event.target.value)}
+                placeholder="VPU"
+              />
+              <select value={mapFilters.source} onChange={(event) => updateMapFilter("source", event.target.value)}>
+                {["", "nextgen", "nwm", "era5", "usgs"].map((source) => (
+                  <option key={source || "all"} value={source}>
+                    {source ? source.toUpperCase() : "All sources"}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={mapFilters.state}
+                onChange={(event) => updateMapFilter("state", event.target.value)}
+                placeholder="State"
+              />
+              <input
+                value={mapFilters.huc}
+                onChange={(event) => updateMapFilter("huc", event.target.value)}
+                placeholder="HUC"
+              />
+              <button type="button" onClick={searchMap} disabled={loading} title="Filter map">
+                <Search size={18} />
+              </button>
+            </div>
+            <div className="mapMeta">
+              <strong>{mapResult.count || 0}</strong>
+              <span>shown of {mapResult.total_matching_map_ready_count || 0} matching map-ready sites</span>
+              <span>{mapSummary.map_ready_record_count || 0} national map-ready pairs</span>
+            </div>
+            <div ref={mapElementRef} className="mapCanvas" />
+            {selectedMapSite && (
+              <div className="mapDetails">
+                <div>
+                  <strong>{selectedMapSite.name || selectedMapSite.usgs_gage_id}</strong>
+                  <span>USGS {selectedMapSite.usgs_gage_id || "unknown"} | VPU {selectedMapSite.vpu_id || "unknown"}</span>
+                  <span>t-route {selectedMapSite.troute_feature_id || "unknown"} | COMID {selectedMapSite.comid || "candidate set"}</span>
+                  <span>{selectedMapSite.comid_status || "unknown"}: {(selectedMapSite.comid_candidates || []).slice(0, 5).join(", ") || "no candidates"}</span>
+                </div>
+                <div className="sourcePills">
+                  {Object.entries(selectedMapSite.availability || {}).map(([source, available]) => (
+                    <span key={source} className={available ? "ready" : "blocked"}>{source.toUpperCase()}</span>
+                  ))}
+                </div>
+                <button type="button" onClick={() => useMapSiteForRequest(selectedMapSite)}>
+                  <Send size={16} />
+                  Use for request
+                </button>
+              </div>
+            )}
           </div>
           <div className="datasetTable">
             <div className="tableHeader">

@@ -250,6 +250,27 @@ def resource_download_max_total_bytes(defaults: dict[str, Any]) -> int:
     return int(mb) * 1024 * 1024
 
 
+def national_resource_vpus(defaults: dict[str, Any]) -> list[str]:
+    raw = defaults["resource_download"].get("conus_vpus")
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError("resource_download.conus_vpus must be a non-empty list")
+    return [str(vpu) for vpu in raw]
+
+
+def national_resource_download_max_object_bytes(defaults: dict[str, Any]) -> int:
+    mb = defaults["resource_download"].get("national_resource_max_object_mb")
+    if mb in (None, ""):
+        return resource_download_max_object_bytes(defaults)
+    return int(mb) * 1024 * 1024
+
+
+def national_resource_download_max_total_bytes(defaults: dict[str, Any]) -> int | None:
+    mb = defaults["resource_download"].get("national_resource_max_total_mb")
+    if mb in (None, ""):
+        return None
+    return int(mb) * 1024 * 1024
+
+
 def load_project(
     root: Path,
     defaults_path: Path | None = None,

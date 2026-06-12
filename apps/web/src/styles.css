@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -245,11 +246,15 @@ legend {
 }
 
 .searchRow input,
-.manualGrid input {
+.manualGrid input,
+.mapToolbar input,
+.mapToolbar select {
   min-width: 0;
   border: 1px solid #cbd4d0;
   border-radius: 6px;
   padding: 9px;
+  background: #ffffff;
+  color: #17212b;
 }
 
 .searchRow button,
@@ -331,6 +336,27 @@ legend {
   word-break: break-word;
 }
 
+.mapSummary {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #d7e4de;
+  border-radius: 6px;
+  background: #f4faf7;
+}
+
+.mapSummary strong {
+  color: #1f7a4d;
+}
+
+.mapSummary span {
+  color: #5a6470;
+  font-size: 13px;
+}
+
 .columnGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -376,6 +402,103 @@ legend {
 button:disabled {
   opacity: 0.52;
   cursor: not-allowed;
+}
+
+.mapPanel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.mapToolbar {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.5fr) 82px minmax(130px, 0.8fr) 82px 98px 42px;
+  gap: 8px;
+}
+
+.mapToolbar button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cbd4d0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17212b;
+}
+
+.mapMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  color: #5a6470;
+  font-size: 13px;
+}
+
+.mapMeta strong {
+  color: #1f7a4d;
+  font-size: 18px;
+}
+
+.mapCanvas {
+  width: 100%;
+  height: clamp(360px, 54vh, 620px);
+  border: 1px solid #d9dfdc;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #eef3f1;
+}
+
+.mapDetails {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #d7e4de;
+  border-radius: 6px;
+  background: #f4faf7;
+}
+
+.mapDetails div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mapDetails span {
+  color: #5a6470;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.mapDetails button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #24535d;
+  border-radius: 6px;
+  background: #24535d;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+.sourcePills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sourcePills span {
+  padding: 4px 7px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .datasetTable {
@@ -500,7 +623,17 @@ button:disabled {
   }
 
   .timeGrid,
-  .actions {
+  .actions,
+  .mapToolbar,
+  .mapDetails {
     grid-template-columns: 1fr;
+  }
+
+  .mapCanvas {
+    height: 420px;
+  }
+
+  .sourcePills {
+    justify-content: flex-start;
   }
 }

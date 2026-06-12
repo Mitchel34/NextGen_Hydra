@@ -23,6 +23,8 @@ from .artifacts import (
     schema_inspection,
     site_directory,
     site_directory_detail,
+    site_map,
+    site_map_summary,
     streamflow_units_status,
 )
 
@@ -64,6 +66,34 @@ def api_site_directory_detail(identifier: str) -> dict[str, object]:
         return site_directory_detail(identifier, project_root())
     except ArtifactError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/site-map")
+def api_site_map(
+    query: str | None = None,
+    source: str | None = None,
+    vpu: str | None = None,
+    state: str | None = None,
+    huc: str | None = None,
+    limit: int = Query(default=5000, ge=1, le=250000),
+) -> dict[str, object]:
+    try:
+        return site_map(
+            project_root(),
+            query=query,
+            source=source,
+            vpu=vpu,
+            state=state,
+            huc=huc,
+            limit=limit,
+        )
+    except ArtifactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/site-map/summary")
+def api_site_map_summary() -> dict[str, object]:
+    return site_map_summary(project_root())
 
 
 @app.get("/api/status")
