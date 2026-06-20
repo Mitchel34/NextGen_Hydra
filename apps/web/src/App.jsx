@@ -1,20 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Database,
-  Download,
-  FileSearch,
-  Filter,
-  RefreshCw,
-  Search,
-  Send,
-  ShieldCheck
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import AlertTriangle from "lucide-react/dist/esm/icons/alert-triangle.js";
+import CheckCircle2 from "lucide-react/dist/esm/icons/check-circle-2.js";
+import Database from "lucide-react/dist/esm/icons/database.js";
+import Download from "lucide-react/dist/esm/icons/download.js";
+import FileSearch from "lucide-react/dist/esm/icons/file-search.js";
+import Filter from "lucide-react/dist/esm/icons/filter.js";
+import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw.js";
+import Search from "lucide-react/dist/esm/icons/search.js";
+import Send from "lucide-react/dist/esm/icons/send.js";
+import ShieldCheck from "lucide-react/dist/esm/icons/shield-check.js";
 
-const API_ROOT = "";
+const API_ROOT = (import.meta.env.VITE_API_ROOT || "").replace(/\/$/, "");
 
 async function fetchJson(path, options) {
   const response = await fetch(`${API_ROOT}${path}`, options);
@@ -32,9 +28,6 @@ function statusTone(status) {
 }
 
 export default function App() {
-  const mapElementRef = useRef(null);
-  const leafletMapRef = useRef(null);
-  const markerLayerRef = useRef(null);
   const [sites, setSites] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [status, setStatus] = useState({ status: "loading" });
@@ -73,56 +66,20 @@ export default function App() {
   );
   const tidyReady = datasets.some((dataset) => dataset.tidy_available);
   const exportReady = datasets.some((dataset) => dataset.export_available);
+  const vpuCount = Object.keys(mapSummary.vpu_counts || {}).length;
+  const mapReadyCount = Number(mapSummary.map_ready_record_count || 0);
+  const nextgenReadyCount = Number((mapSummary.availability_counts || {}).nextgen || mapReadyCount);
+  const cachedRows = datasets.reduce((total, dataset) => total + Number(dataset.tidy_rows || 0), 0);
+  const cachedSiteCount = new Set(datasets.flatMap((dataset) => dataset.site_ids || [])).size;
+  const cachedRunLabels = Array.from(
+    new Set(datasets.map((dataset) => `${dataset.run_date} ${dataset.run_type} ${dataset.cycle}`))
+  ).sort();
+  const cachedWindow = exportOptions.time_coverage || {};
+  const apiMode = error ? "offline" : API_ROOT ? "remote" : "local";
 
   useEffect(() => {
     refresh();
   }, []);
-
-  useEffect(() => {
-    if (!mapElementRef.current || leafletMapRef.current) return;
-    const map = L.map(mapElementRef.current, {
-      preferCanvas: true,
-      scrollWheelZoom: false
-    }).setView([39.5, -96], 4);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 12,
-      attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(map);
-    leafletMapRef.current = map;
-    markerLayerRef.current = L.layerGroup().addTo(map);
-    return () => {
-      map.remove();
-      leafletMapRef.current = null;
-      markerLayerRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = leafletMapRef.current;
-    const layer = markerLayerRef.current;
-    if (!map || !layer) return;
-    layer.clearLayers();
-    const bounds = [];
-    for (const feature of mapResult.features || []) {
-      const [longitude, latitude] = feature.geometry?.coordinates || [];
-      if (latitude == null || longitude == null) continue;
-      const properties = feature.properties || {};
-      const marker = L.circleMarker([latitude, longitude], {
-        radius: 5,
-        color: "#24535d",
-        weight: 1,
-        fillColor: "#2f7f6f",
-        fillOpacity: 0.72
-      });
-      marker.bindTooltip(properties.name || properties.usgs_gage_id || properties.site_id || "Paired site");
-      marker.on("click", () => setSelectedMapSite(properties));
-      marker.addTo(layer);
-      bounds.push([latitude, longitude]);
-    }
-    if (bounds.length) {
-      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 8 });
-    }
-  }, [mapResult.features]);
 
   async function refresh() {
     setLoading(true);
@@ -155,6 +112,7 @@ export default function App() {
       setSelectedColumns(new Set((optionsData.columns || [])));
     } catch (err) {
       setError(err.message);
+      setStatus({ status: "api_unavailable" });
     } finally {
       setLoading(false);
     }
@@ -345,7 +303,7 @@ export default function App() {
           <img src="/appalachian-hydro.svg" alt="" />
           <div>
             <h1>NextGen Hydra</h1>
-            <p>Appalachian historical streamflow portal</p>
+            <p>National NextGen coverage and governed streamflow requests</p>
           </div>
         </div>
         <button className="iconButton" onClick={refresh} disabled={loading} title="Refresh artifacts">
@@ -354,7 +312,8 @@ export default function App() {
       </header>
 
       <section className="statusStrip" aria-label="Artifact status">
-        <StatusChip icon={<Database size={16} />} label="Datasets" value={datasets.length} tone="muted" />
+        <StatusChip icon={<Database size={16} />} label="Coverage" value={formatCount(mapReadyCount)} tone="good" />
+        <StatusChip icon={<FileSearch size={16} />} label="VPUs" value={vpuCount || 0} tone="good" />
         <StatusChip
           icon={<ShieldCheck size={16} />}
           label="Status"
@@ -362,39 +321,56 @@ export default function App() {
           tone={status.status === "ready" ? "good" : "warn"}
         />
         <StatusChip
-          icon={<FileSearch size={16} />}
-          label="Schema"
-          value={schema.status}
-          tone={statusTone(schema.status)}
-        />
-        <StatusChip
           icon={tidyReady ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          label="Tidy"
-          value={tidyReady ? "ready" : "blocked"}
+          label="Cached Rows"
+          value={formatCount(cachedRows)}
           tone={tidyReady ? "good" : "warn"}
         />
         <StatusChip
           icon={exportReady ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          label="Exports"
-          value={exportReady ? "available" : "blocked"}
-          tone={exportReady ? "good" : "warn"}
+          label="API"
+          value={apiMode}
+          tone={error ? "warn" : "good"}
         />
       </section>
 
-      {error && <div className="errorBanner">{error}</div>}
+      <section className="coverageBand" aria-label="Operating model">
+        <div>
+          <span>National Index</span>
+          <strong>{formatCount(mapReadyCount)} paired sites</strong>
+          <small>{vpuCount || 0} CONUS VPUs, {formatCount(nextgenReadyCount)} NextGen-ready rows</small>
+        </div>
+        <div>
+          <span>Cached Slice</span>
+          <strong>{formatCount(cachedRows)} rows</strong>
+          <small>{cachedSiteCount || 0} sites, {cachedRunLabels[0] || "no run cached"}</small>
+        </div>
+        <div>
+          <span>Request Path</span>
+          <strong>Queued for admin review</strong>
+          <small>bounded manifests, approval IDs, published exports</small>
+        </div>
+      </section>
+
+      {error && (
+        <div className="errorBanner">
+          <strong>API unavailable</strong>
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="workspace">
         <section className="panel controls" aria-label="Export filters">
           <div className="panelHeader">
             <Filter size={18} />
-            <h2>Request</h2>
+            <h2>Data Request</h2>
           </div>
           <fieldset>
-            <legend>Find Sites</legend>
+            <legend>National Site Directory</legend>
             <div className="searchRow">
               <input
                 type="search"
-                placeholder="COMID, USGS gage, name, or site ID"
+                placeholder="USGS, COMID, VPU, HUC, station"
                 value={siteQuery}
                 onChange={(event) => setSiteQuery(event.target.value)}
               />
@@ -454,7 +430,7 @@ export default function App() {
             </div>
             <button className="requestButton" type="button" onClick={requestAcquisition} disabled={loading || requestSources.size === 0}>
               <Send size={18} />
-              Submit Acquisition Request
+              Queue Acquisition Request
             </button>
             {acquisitionResult && (
               <p className="requestStatus">
@@ -462,13 +438,13 @@ export default function App() {
               </p>
             )}
             <div className="mapSummary">
-              <strong>{mapSummary.map_ready_record_count || 0}</strong>
-              <span>map-ready paired sites across {Object.keys(mapSummary.vpu_counts || {}).length} VPUs</span>
+              <strong>{formatCount(mapReadyCount)}</strong>
+              <span>paired sites across {vpuCount || 0} VPUs</span>
             </div>
           </fieldset>
 
           <fieldset>
-            <legend>Sites</legend>
+            <legend>Cached Export Sites</legend>
             <div className="checkGrid">
               {sites.map((site) => (
                 <label key={site.site_id} className="checkRow">
@@ -582,7 +558,7 @@ export default function App() {
           <div className="actions">
             <button onClick={runPreview} disabled={loading || selectedSites.size === 0}>
               <FileSearch size={18} />
-              Preview
+              Preview Cached
             </button>
             <button
               className="primary"
@@ -590,7 +566,7 @@ export default function App() {
               disabled={loading || !preview?.available}
             >
               <Download size={18} />
-              Export
+              Create Export
             </button>
           </div>
         </section>
@@ -598,7 +574,7 @@ export default function App() {
         <section className="panel results" aria-label="Available datasets">
           <div className="panelHeader">
             <Database size={18} />
-            <h2>Datasets</h2>
+            <h2>Coverage & Data</h2>
           </div>
           <div className="mapPanel" aria-label="National paired-site map">
             <div className="mapToolbar">
@@ -637,9 +613,13 @@ export default function App() {
             <div className="mapMeta">
               <strong>{mapResult.count || 0}</strong>
               <span>shown of {mapResult.total_matching_map_ready_count || 0} matching map-ready sites</span>
-              <span>{mapSummary.map_ready_record_count || 0} national map-ready pairs</span>
+              <span>{formatCount(mapReadyCount)} national pairs</span>
             </div>
-            <div ref={mapElementRef} className="mapCanvas" />
+            <CoverageMap
+              features={mapResult.features || []}
+              selectedSite={selectedMapSite}
+              onSelect={setSelectedMapSite}
+            />
             {selectedMapSite && (
               <div className="mapDetails">
                 <div>
@@ -659,6 +639,12 @@ export default function App() {
                 </button>
               </div>
             )}
+          </div>
+          <div className="sectionTitle">
+            <strong>Cached Approved Slice</strong>
+            <span>
+              {cachedWindow.start_time_utc || "missing"} to {cachedWindow.end_time_utc || "missing"}
+            </span>
           </div>
           <div className="datasetTable">
             <div className="tableHeader">
@@ -758,9 +744,93 @@ function StatusChip({ icon, label, value, tone }) {
   );
 }
 
+function CoverageMap({ features, selectedSite, onSelect }) {
+  const projected = useMemo(() => projectMapFeatures(features), [features]);
+  return (
+    <div className="mapCanvas" role="img" aria-label="Mapped paired sites">
+      <svg className="mapSvg" viewBox="0 0 1000 520" preserveAspectRatio="xMidYMid meet">
+        <rect className="mapWater" x="0" y="0" width="1000" height="520" rx="8" />
+        <path className="mapLand" d="M75 80 C160 40 315 45 430 72 C560 101 642 72 760 90 C875 108 935 178 925 268 C914 365 805 430 670 452 C530 475 440 425 318 445 C198 465 102 405 72 318 C42 230 18 128 75 80 Z" />
+        {projected.points.map((point) => {
+          const selected = selectedSite?.site_id && selectedSite.site_id === point.properties.site_id;
+          return (
+            <circle
+              key={point.key}
+              className={selected ? "mapPoint selected" : "mapPoint"}
+              cx={point.x}
+              cy={point.y}
+              r={selected ? 5 : 2.4}
+              onClick={() => onSelect(point.properties)}
+            >
+              <title>{point.title}</title>
+            </circle>
+          );
+        })}
+        {!projected.points.length && (
+          <text className="mapEmpty" x="500" y="260" textAnchor="middle">
+            No mapped sites
+          </text>
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function splitIdentifiers(value) {
   return String(value || "")
     .split(/[,\s]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function formatCount(value) {
+  const numeric = Number(value || 0);
+  return new Intl.NumberFormat("en-US").format(numeric);
+}
+
+function projectMapFeatures(features) {
+  const rawPoints = (features || [])
+    .map((feature, index) => {
+      const [longitude, latitude] = feature.geometry?.coordinates || [];
+      if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
+      return {
+        index,
+        longitude,
+        latitude,
+        properties: feature.properties || {}
+      };
+    })
+    .filter(Boolean);
+
+  if (!rawPoints.length) {
+    return { points: [] };
+  }
+
+  const longitudes = rawPoints.map((point) => point.longitude);
+  const latitudes = rawPoints.map((point) => point.latitude);
+  const bounds = {
+    minLon: Math.min(...longitudes),
+    maxLon: Math.max(...longitudes),
+    minLat: Math.min(...latitudes),
+    maxLat: Math.max(...latitudes)
+  };
+  const lonSpan = Math.max(bounds.maxLon - bounds.minLon, 1);
+  const latSpan = Math.max(bounds.maxLat - bounds.minLat, 1);
+  const padX = 60;
+  const padY = 42;
+
+  return {
+    points: rawPoints.map((point) => {
+      const x = padX + ((point.longitude - bounds.minLon) / lonSpan) * (1000 - padX * 2);
+      const y = 520 - padY - ((point.latitude - bounds.minLat) / latSpan) * (520 - padY * 2);
+      const label = point.properties.name || point.properties.usgs_gage_id || point.properties.site_id || "Paired site";
+      return {
+        key: `${point.properties.site_id || point.index}-${point.longitude}-${point.latitude}`,
+        x,
+        y,
+        properties: point.properties,
+        title: `${label} | VPU ${point.properties.vpu_id || "unknown"}`
+      };
+    })
+  };
 }
